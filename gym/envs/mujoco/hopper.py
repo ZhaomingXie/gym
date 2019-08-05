@@ -6,6 +6,10 @@ class HopperEnv(mujoco_env.MujocoEnv, utils.EzPickle):
     def __init__(self):
         mujoco_env.MujocoEnv.__init__(self, 'hopper.xml', 4)
         utils.EzPickle.__init__(self)
+        self.mean_pos = np.array([1, 0, 0, 0, 0])
+        self.mean_vel = np.array([0, 0, 0, 0, 0, 0])
+        self.std_pos = np.array([1, np.pi, np.pi, np.pi])
+        self.std_vel = np.array([1, 1, 1, 1, 1, 1])
 
     def step(self, a):
         posbefore = self.sim.data.qpos[0]
@@ -22,9 +26,13 @@ class HopperEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         return ob, reward, done, {}
 
     def _get_obs(self):
+        self.mean_pos = np.array([1, 0, 0, 0, 0])
+        self.mean_vel = np.array([0, 0, 0, 0, 0, 0])
+        self.std_pos = np.array([1, np.pi, np.pi, np.pi, np.pi])
+        self.std_vel = np.array([1, 1, 1, 1, 1, 1])
         return np.concatenate([
-            self.sim.data.qpos.flat[1:],
-            np.clip(self.sim.data.qvel.flat, -10, 10)
+            (self.sim.data.qpos.flat[1:] - self.mean_pos)/self.std_pos,
+            (np.clip(self.sim.data.qvel.flat, -10, 10) - self.mean_vel)/self.std_vel
         ])
 
     def reset_model(self):
