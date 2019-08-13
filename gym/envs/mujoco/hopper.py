@@ -26,10 +26,11 @@ class HopperEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         return ob, reward, done, {}
 
     def _get_obs(self):
+        #print(self.sim.data.qpos.flat[1:])
         self.mean_pos = np.array([1, 0, 0, 0, 0])
         self.mean_vel = np.array([0, 0, 0, 0, 0, 0])
-        self.std_pos = np.array([1, np.pi, np.pi, np.pi, np.pi])
-        self.std_vel = np.array([1, 1, 1, 1, 1, 1])
+        self.std_pos = np.array([1, 0.2, 2.6, 2.6, 0.78])
+        self.std_vel = np.array([2, 2, 4, 10, 10, 10])
         return np.concatenate([
             (self.sim.data.qpos.flat[1:] - self.mean_pos)/self.std_pos,
             (np.clip(self.sim.data.qvel.flat, -10, 10) - self.mean_vel)/self.std_vel
