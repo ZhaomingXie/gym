@@ -33,8 +33,20 @@ class HopperEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.std_vel = np.array([2, 2, 4, 10, 10, 10])
         return np.concatenate([
             (self.sim.data.qpos.flat[1:] - self.mean_pos)/self.std_pos,
-            (np.clip(self.sim.data.qvel.flat, -10, 10) - self.mean_vel)/self.std_vel
+            (np.clip(self.sim.data.qvel.flat, -10, 10) - self.mean_vel)/self.std_vel, self.has_contact()*np.ones(1)
         ])
+        # return np.concatenate([
+        #     self.sim.data.qpos.flat[1:],
+        #     np.clip(self.sim.data.qvel.flat, -10, 10)
+        # ])
+
+    def has_contact(self):
+        contact_force = self.sim.data.cfrc_ext.flat[-1]
+        #print(self.sim.data.cfrc_ext)
+        if abs(contact_force) > 1e-3:
+            return True
+        else:
+            return False
 
     def reset_model(self):
         qpos = self.init_qpos + self.np_random.uniform(low=-.005, high=.005, size=self.model.nq)
@@ -47,3 +59,4 @@ class HopperEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.viewer.cam.distance = self.model.stat.extent * 0.75
         self.viewer.cam.lookat[2] = 1.15
         self.viewer.cam.elevation = -20
+
