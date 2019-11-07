@@ -338,6 +338,12 @@ register(
     max_episode_steps=1000,
 )
 
+register(
+    id='Cassie-v1',
+    entry_point='gym.envs.mujoco:CassieEnv',
+    max_episode_steps=400,
+)
+
 # Robotics
 # ----------------------------------------
 

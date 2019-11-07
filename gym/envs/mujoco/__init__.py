@@ -14,3 +14,5 @@ from gym.envs.mujoco.humanoidstandup import HumanoidStandupEnv
 from gym.envs.mujoco.pusher import PusherEnv
 from gym.envs.mujoco.thrower import ThrowerEnv
 from gym.envs.mujoco.striker import StrikerEnv
+from gym.envs.mujoco.cassie import CassieEnv
+from gym.envs.mujoco.loadstep import CassieTrajectory

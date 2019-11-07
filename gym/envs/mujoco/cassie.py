@@ -1,13 +1,17 @@
 import numpy as np
 from gym.envs.mujoco import mujoco_env
 from gym import utils
-from loadstep import CassieTrajectory
+from gym.envs.mujoco.loadstep import CassieTrajectory
+import random
+
+import sys
+sys.path.append('/home/zhaoming/Documents/dev/gym/gym/envs/mujoco')
 
 class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 	def __init__(self):
-		self.P = np.array([100, 100, 88, 96, 50, 100, 100, 88, 96, 50])
-		self.D = np.array([10.0, 10.0, 8.0, 9.6, 5.0, 10.0, 10.0, 8.0, 9.6, 5.0])
-		self.trajectory = CassieTrajectory("trajectory/stepdata.bin")
+		self.P = np.array([100 / 25, 100 / 25, 88 / 16, 96 /16, 50 / 50, 100 / 25, 100 /25, 88 /16, 96 /16, 50 /50])
+		self.D = np.array([10.0 / 25, 10.0 /25, 8.0 /16, 9.6 /16, 5.0 /50, 10.0 /25, 10.0 /25, 8.0 /16, 9.6 /16, 5.0 /50])
+		self.trajectory = CassieTrajectory("/home/zhaoming/Documents/dev/gym/gym/envs/mujoco/trajectory/stepdata.bin")
 		self.time = 0
 		self.phase = 0
 		self.counter = 0
