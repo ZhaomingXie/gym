@@ -58,7 +58,7 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.max_phase = 28
 
         # used for rendering
-        self.controller_frameskip = 30
+        self.controller_frameskip = 60
 
         # fake
         self.foot_body_ids = np.zeros(2).astype(np.int)
@@ -121,11 +121,11 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         state = self.get_state()
 
         height = state[1]
-        done = not (height > 0.4 and height < 3.0) or self.time >= self.time_limit
+        done = not (height > 0.65 and height < 3.0) or self.time >= self.time_limit
         reward = self.compute_reward()
 
-        if reward < 0.3:
-            done = True
+        # if reward < 0.3:
+        #     done = True
 
         return state, reward, done, {}
 
@@ -339,8 +339,9 @@ class CassieStepperEnv(CassieEnv):
         self.targets = self.delta_to_k_targets(k=self.lookahead)
 
         self.calc_potential()
+        state = np.concatenate((obs, self.targets.flatten()))
 
-        return np.concatenate((obs, self.targets.flatten()))
+        return state
 
     def step(self, action):
         obs = torch.from_numpy(super().get_state()).float()
@@ -356,17 +357,15 @@ class CassieStepperEnv(CassieEnv):
         self.calc_progress_reward()
         self.calc_step_state()
 
+        self.targets = self.delta_to_k_targets(k=self.lookahead)
+        state = np.concatenate((obs, self.targets.flatten()))
+
         if cur_step_index != self.next_step_index:
+            # needs to be done after walk_target is updated
+            # which is in delta_to_k_targets()
             self.calc_potential()
 
-        self.targets = self.delta_to_k_targets(k=self.lookahead)
-
-        return (
-            np.concatenate((obs, self.targets.flatten())),
-            self.progress + self.step_bonus,
-            done,
-            {},
-        )
+        return (state, self.progress + self.step_bonus, done, {})
 
     def calc_potential(self):
 
@@ -418,7 +417,7 @@ class CassieStepperEnv(CassieEnv):
                 contact_pos = self.data.contact[contact_id].pos
                 delta = step_pos - contact_pos
                 distance = (delta[0] ** 2 + delta[1] ** 2) ** (1 / 2)
-                self.step_bonus = 10 * np.exp(-distance / self.step_radius)
+                self.step_bonus = 20 * np.exp(-distance / self.step_radius)
                 break
 
         if self.target_reached:
