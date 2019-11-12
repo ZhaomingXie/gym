@@ -2,7 +2,7 @@
 <mujoco model='cassie'>
   <compiler inertiafromgeom='auto' angle='degree' eulerseq='zyx' meshdir='cassie-stl-meshes'/>
   <size nuser_actuator='1' nuser_sensor='1' nuser_geom='1'/>
-  <option timestep='0.0005' iterations='50' solver='PGS' gravity='0 0 -9.81'/>
+  <option timestep='0.001' iterations='50' solver='PGS' gravity='0 0 -9.81'/>
   <!-- Timestep is set to 0.0005 because our controller runs at 2 kHz -->
   <!-- Larger values still have stable dynamics -->
 
@@ -78,6 +78,19 @@
 
     <light mode='trackcom' pos='0 0 5' dir='0 0 -1' diffuse="0.3 0.3 0.3"/>
     <light directional='true' pos='0 0 3' dir='0 0 -1' diffuse='0.55 0.55 0.55' specular='0 0 0'/>
+
+    <body name="step1" pos="10 0 1">
+      <geom pos="0 0 0" name="step1" mass="0" size="0.12 1.0 0.1" type="box" condim='3' conaffinity='15'/>
+    </body>
+    <body name="step2" pos="10 0 1">
+      <geom pos="0 0 0" name="step2" mass="0" size="0.12 1.0 0.1" type="box" condim='3' conaffinity='15'/>
+    </body>
+    <body name="step3" pos="10 0 1">
+      <geom pos="0 0 0" name="step3" mass="0" size="0.12 1.0 0.1" type="box" condim='3' conaffinity='15'/>
+    </body>
+    <body name="step4" pos="10 0 1">
+      <geom pos="0 0 0" name="step4" mass="0" size="0.12 1.0 0.1" type="box" condim='3' conaffinity='15'/>
+    </body>
 
     <body name='cassie-pelvis' pos='0 0 1.01' childclass='cassie'>
       <camera name='track' pos='0 -4 0.1' zaxis='0 -1 0.07' mode='track'/>
