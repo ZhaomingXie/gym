@@ -26,11 +26,12 @@ class Walker2dEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         done = not (height > 0.8 and height < 2.0 and
                     ang > -1.0 and ang < 1.0)
         ob = self._get_obs()
+
         #data = self.sim.data
         #print(data.qfrc_actuator.flat[:])
 
         #reward = np.exp(-(self.sim.data.qvel[0] - 1)**2)
-        print(a)
+        #print(ob, self.get_contact())
         return ob, reward, done, {}
 
     def _get_obs(self):
@@ -67,7 +68,6 @@ class Walker2dEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         if self.right_counter >= 5:
             self.prev_right = contacts[0]
             self.right_counter = 0
-        #print(contacts)
         return contacts
 
     def reset_model(self):
