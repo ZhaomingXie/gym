@@ -182,6 +182,7 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
     def reset(self, height_offset=0):
         self.phase = np.random.randint(0, 27)
+        self.phase = 9
         self.time = 0
         self.counter = 0
         qpos, qvel = self.get_kin_state()
@@ -194,7 +195,7 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
     def viewer_setup(self):
         self.viewer.cam.trackbodyid = 1
         self.viewer.cam.distance = self.model.stat.extent * 0.3
-        self.viewer.cam.lookat[2] = 2.0
+        self.viewer.cam.lookat[2] = 20
         self.viewer.cam.elevation = -20
 
     # def render(self, mode="human"):
@@ -211,12 +212,13 @@ class CassieStepperEnv(CassieEnv):
         self.step_bonus = 0
 
         self.n_steps = 50
-        self.pitch_limit = 20
-        self.yaw_limit = 0
+        self.pitch_limit = 40
+        self.yaw_limit = 10
         self.tilt_limit = 0
 
-        self.step_radius = 0.12  # defined in xml
-        self.rendered_step_count = 4  # defined in xml
+        self.step_radius = 0.12  # xml
+        self.step_half_height = 0.1  # xml
+        self.rendered_step_count = 4  # xml
         self.initial_height = 20
 
         self.terrain_info = np.zeros((self.n_steps, 6))
@@ -258,6 +260,7 @@ class CassieStepperEnv(CassieEnv):
             phi, x_tilt, y_tilt = self.terrain_info[index, 3:6]
 
             self.model.body_pos[index + 1, :] = pos[:]
+            self.model.body_pos[index + 1, 2] -= self.step_half_height
             self.model.body_quat[index + 1, :] = euler2quat(phi, y_tilt, x_tilt)
 
     def generate_step_placements(
@@ -279,12 +282,14 @@ class CassieStepperEnv(CassieEnv):
         dphi = np.random.uniform(*y_range, size=n_steps)
         dtheta = np.random.uniform(*p_range, size=n_steps)
 
-        # make first step slightly further to accommodate different starting poses
-        dr[0] = self.init_x
+        first_x = min(self.sim.data.body_xpos[self.foot_body_ids][:, 0])
+        second_x = max(self.sim.data.body_xpos[self.foot_body_ids][:, 0]) - first_x
+
+        dr[0] = first_x
         dphi[0] = 0.0
         dtheta[0] = np.pi / 2
 
-        dr[1] = 0.4
+        dr[1] = second_x
         dphi[1] = 0.0
         dtheta[1] = np.pi / 2
 
@@ -293,8 +298,12 @@ class CassieStepperEnv(CassieEnv):
 
         dphi = np.cumsum(dphi)
 
-        x_ = dr * np.sin(dtheta) * np.cos(dphi)
-        y_ = dr * np.sin(dtheta) * np.sin(dphi)
+        base_phi = DEG2RAD * np.array(
+            [-10] + [20, -20] * (self.n_steps // 2 - 1) + [10]
+        )
+
+        x_ = dr * np.sin(dtheta) * np.cos(dphi + base_phi)
+        y_ = dr * np.sin(dtheta) * np.sin(dphi + base_phi)
         z_ = dr * np.cos(dtheta)
 
         # Prevent steps from overlapping
@@ -304,11 +313,8 @@ class CassieStepperEnv(CassieEnv):
         y = np.cumsum(y_)
         z = np.cumsum(z_) + self.initial_height
 
-        # because xyz is the centre of box, need to account for height
-        z[:] -= 0.098
-
         min_z = self.step_radius * np.sin(self.tilt_limit * DEG2RAD) + 0.01
-        np.clip(z, a_min=min_z - 0.098, a_max=None, out=z)
+        np.clip(z, a_min=min_z, a_max=None, out=z)
 
         return np.stack((x, y, z, dphi, x_tilt, y_tilt), axis=1)
 
@@ -326,6 +332,8 @@ class CassieStepperEnv(CassieEnv):
 
             # +1 because first body is worldBody
             self.model.body_pos[oldest + 1, :] = pos[:]
+            # account for half height
+            self.model.body_pos[oldest + 1, 2] -= self.step_half_height
             self.model.body_quat[oldest + 1, :] = euler2quat(phi, y_tilt, x_tilt)
 
     def reset(self):
