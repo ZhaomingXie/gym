@@ -225,6 +225,10 @@ class CassieStepperEnv(CassieEnv):
         self.linear_potential = 0
         self.walk_target = np.zeros(3)
 
+        self.base_phi = DEG2RAD * np.array(
+            [-10] + [20, -20] * (self.n_steps // 2 - 1) + [10]
+        )
+
         from gym.envs.mujoco.model import ActorCriticNet
 
         Net = ActorCriticNet
@@ -298,12 +302,8 @@ class CassieStepperEnv(CassieEnv):
 
         dphi = np.cumsum(dphi)
 
-        base_phi = DEG2RAD * np.array(
-            [-10] + [20, -20] * (self.n_steps // 2 - 1) + [10]
-        )
-
-        x_ = dr * np.sin(dtheta) * np.cos(dphi + base_phi)
-        y_ = dr * np.sin(dtheta) * np.sin(dphi + base_phi)
+        x_ = dr * np.sin(dtheta) * np.cos(dphi + self.base_phi)
+        y_ = dr * np.sin(dtheta) * np.sin(dphi + self.base_phi)
         z_ = dr * np.cos(dtheta)
 
         # Prevent steps from overlapping
@@ -351,7 +351,7 @@ class CassieStepperEnv(CassieEnv):
 
         return state
 
-    def step(self, action):
+    def step(self, action, step_reached_callback=None):
         obs = torch.from_numpy(super().get_state()).float()
 
         with torch.no_grad():
@@ -371,6 +371,8 @@ class CassieStepperEnv(CassieEnv):
         if cur_step_index != self.next_step_index:
             # needs to be done after walk_target is updated
             # which is in delta_to_k_targets()
+            if step_reached_callback is not None:
+                step_reached_callback(self)
             self.calc_potential()
 
         return (state, self.progress + self.step_bonus, done, {})
@@ -475,6 +477,24 @@ class CassieStepperEnv(CassieEnv):
         # deltas[:, 0:2] /= 1 + np.abs(deltas[:, 0:2])
 
         return deltas
+
+    def set_next_next_step_location(self, pitch, yaw):
+
+        next_step_xyz = self.terrain_info[self.next_step_index]
+
+        dr = 0.4
+        base_phi = self.base_phi[self.next_step_index + 1]
+        base_yaw = self.terrain_info[self.next_step_index, 3]
+
+        yaw = yaw + base_yaw
+        x = next_step_xyz[0] + dr * np.sin(pitch) * np.cos(yaw + base_phi)
+        y = next_step_xyz[1] + dr * np.sin(pitch) * np.sin(yaw + base_phi)
+        z = next_step_xyz[2] + dr * np.cos(pitch)
+
+        self.terrain_info[self.next_step_index + 1, 0] = x
+        self.terrain_info[self.next_step_index + 1, 1] = y
+        self.terrain_info[self.next_step_index + 1, 2] = z
+        self.terrain_info[self.next_step_index + 1, 3] = yaw
 
 
 def euler2quat(z=0, y=0, x=0):
