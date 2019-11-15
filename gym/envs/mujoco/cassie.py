@@ -215,6 +215,7 @@ class CassieStepperEnv(CassieEnv):
         self.pitch_limit = 40
         self.yaw_limit = 10
         self.tilt_limit = 0
+        self.r_range = np.array([0.35, 0.45])
 
         self.step_radius = 0.12  # xml
         self.step_half_height = 0.1  # xml
@@ -228,6 +229,12 @@ class CassieStepperEnv(CassieEnv):
         self.base_phi = DEG2RAD * np.array(
             [-10] + [20, -20] * (self.n_steps // 2 - 1) + [10]
         )
+
+        self.yaw_samples = np.linspace(-10, 10, num=10) * DEG2RAD
+        self.pitch_samples = np.linspace(-20, 20, num=10) * DEG2RAD
+        self.yaw_prob = np.ones(10) * 0.1
+        self.pitch_prob = np.ones(10) * 0.1
+        self.yaw_pitch_prob = np.ones((10, 10)) * 0.01
 
         from gym.envs.mujoco.model import ActorCriticNet
 
@@ -248,6 +255,10 @@ class CassieStepperEnv(CassieEnv):
             self.sim.model.geom_bodyid[self.model._geom_name2id[key]]: key
             for key in ["floor", "step1", "step2", "step3", "step4"]
         }
+
+        self.next_next_pitch = 0
+        self.next_next_yaw = 0
+        self.temp_states = np.empty((100, self.observation_space.shape[0]))
 
     def randomize_terrain(self):
         self.terrain_info = self.generate_step_placements(
@@ -270,19 +281,16 @@ class CassieStepperEnv(CassieEnv):
     def generate_step_placements(
         self,
         n_steps=50,
-        min_gap=0.35,
-        max_gap=0.45,
         yaw_limit=30,
         pitch_limit=25,
         tilt_limit=10,
     ):
 
-        r_range = np.array([min_gap, max_gap])
         y_range = np.array([-yaw_limit, yaw_limit]) * DEG2RAD
         p_range = np.array([90 - pitch_limit, 90 + pitch_limit]) * DEG2RAD
         t_range = np.array([-tilt_limit, tilt_limit]) * DEG2RAD
 
-        dr = np.random.uniform(*r_range, size=n_steps)
+        dr = np.random.uniform(*self.r_range, size=n_steps)
         dphi = np.random.uniform(*y_range, size=n_steps)
         dtheta = np.random.uniform(*p_range, size=n_steps)
 
@@ -307,7 +315,7 @@ class CassieStepperEnv(CassieEnv):
         z_ = dr * np.cos(dtheta)
 
         # Prevent steps from overlapping
-        np.clip(x_[2:], a_min=self.step_radius * 3, a_max=max_gap, out=x_[2:])
+        np.clip(x_[2:], a_min=self.step_radius * 3, a_max=self.r_range[1], out=x_[2:])
 
         x = np.cumsum(x_)
         y = np.cumsum(y_)
@@ -351,7 +359,7 @@ class CassieStepperEnv(CassieEnv):
 
         return state
 
-    def step(self, action, step_reached_callback=None):
+    def step(self, action):
         obs = torch.from_numpy(super().get_state()).float()
 
         with torch.no_grad():
@@ -368,14 +376,84 @@ class CassieStepperEnv(CassieEnv):
         self.targets = self.delta_to_k_targets(k=self.lookahead)
         state = np.concatenate((obs, self.targets.flatten()))
 
+        self.update_terrain = (cur_step_index != self.next_step_index)
+
         if cur_step_index != self.next_step_index:
             # needs to be done after walk_target is updated
             # which is in delta_to_k_targets()
-            if step_reached_callback is not None:
-                step_reached_callback(self)
+            self.update_terrain_info()
             self.calc_potential()
 
         return (state, self.progress + self.step_bonus, done, {})
+
+    def update_terrain_info(self):
+        # print(env.next_step_index)
+        next_next_step = self.next_step_index + 1
+        # env.terrain_info[next_next_step, 2] = 30    
+        self.sample_next_next_step()
+        # +1 because first body is worldBody
+        body_index = next_next_step % self.rendered_step_count + 1
+        self.model.body_pos[body_index, :] = self.terrain_info[next_next_step, 0:3]
+        # account for half height
+        self.model.body_pos[body_index, 2] -= self.step_half_height    
+        phi, x_tilt, y_tilt = self.terrain_info[next_next_step, 3:6]
+        self.model.body_quat[body_index, :] = euler2quat(phi, y_tilt, x_tilt)
+
+    def get_temp_state(self):
+        obs = self.get_state()
+        target = self.delta_to_k_targets(k=self.lookahead)
+        return np.concatenate((obs, target.flatten()))
+
+    def sample_next_next_step(self):
+        pairs = np.indices(dimensions=(10,10))
+        inds = np.random.choice(np.arange(100), p=self.yaw_pitch_prob.reshape(-1),size=1,replace=False)
+        inds = pairs.reshape(-1, 2)[inds]
+        yaw = self.yaw_samples[inds[0, 0]]
+        pitch = self.pitch_samples[inds[0, 1]] + np.pi / 2
+        self.next_next_pitch = pitch
+        self.next_next_yaw = yaw
+        self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw)
+
+    def create_temp_states(self):
+        if self.update_terrain:
+            temp_states = []
+            for i in range(self.yaw_samples.shape[0]):
+                for j in range(self.pitch_samples.shape[0]):
+                    yaw = self.yaw_samples[i]
+                    pitch = np.pi/2 - self.pitch_samples[j]
+                    self.set_next_next_step_location(pitch, yaw)
+                    temp_state = self.get_temp_state()
+                    temp_states.append(temp_state)
+            self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw)
+            ret = np.stack(temp_states)
+        else:
+            ret = self.temp_states
+        return ret
+
+    def update_sample_prob(self, sample_prob):
+        # from gym.envs.mujoco.controller import SoftsignActor, Policy
+        # controller = SoftsignActor(self)
+        # actor_critic = Policy(controller)
+        # actor_critic.load_state_dict(policy_state_dict)
+
+        # value_array = np.zeros((self.yaw_samples.shape[0], self.pitch_samples.shape[0]))
+        # for i in range(self.yaw_samples.shape[0]):
+        #     for j in range(self.pitch_samples.shape[0]):
+        #         yaw = self.yaw_samples[i]
+        #         pitch = np.pi/2 - self.pitch_samples[j]
+        #         self.set_next_next_step_location(pitch, yaw)
+        #         temp_state = self.get_temp_state()
+        #         with torch.no_grad():
+        #             value, _, _, _ = actor_critic.act(
+        #                 torch.from_numpy(temp_state).float().unsqueeze(0), None, None, deterministic=True
+        #             )
+        #         value_array[i,j] = -value.squeeze().cpu().numpy()/5
+
+        # exp_array = np.exp(value_array)
+        if self.update_terrain:
+            self.yaw_pitch_prob = sample_prob
+            self.update_terrain_info()
+            #print(self.yaw_pitch_prob)
 
     def calc_potential(self):
 
@@ -482,7 +560,7 @@ class CassieStepperEnv(CassieEnv):
 
         next_step_xyz = self.terrain_info[self.next_step_index]
 
-        dr = 0.4
+        dr = np.random.uniform(*self.r_range)
         base_phi = self.base_phi[self.next_step_index + 1]
         base_yaw = self.terrain_info[self.next_step_index, 3]
 
