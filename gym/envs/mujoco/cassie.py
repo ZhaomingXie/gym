@@ -398,6 +398,7 @@ class CassieStepperEnv(CassieEnv):
         self.model.body_pos[body_index, 2] -= self.step_half_height    
         phi, x_tilt, y_tilt = self.terrain_info[next_next_step, 3:6]
         self.model.body_quat[body_index, :] = euler2quat(phi, y_tilt, x_tilt)
+        self.targets = self.delta_to_k_targets(k=self.lookahead)
 
     def get_temp_state(self):
         obs = self.get_state()
