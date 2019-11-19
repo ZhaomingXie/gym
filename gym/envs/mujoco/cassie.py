@@ -441,29 +441,9 @@ class CassieStepperEnv(CassieEnv):
         return ret
 
     def update_sample_prob(self, sample_prob):
-        # from gym.envs.mujoco.controller import SoftsignActor, Policy
-        # controller = SoftsignActor(self)
-        # actor_critic = Policy(controller)
-        # actor_critic.load_state_dict(policy_state_dict)
-
-        # value_array = np.zeros((self.yaw_samples.shape[0], self.pitch_samples.shape[0]))
-        # for i in range(self.yaw_samples.shape[0]):
-        #     for j in range(self.pitch_samples.shape[0]):
-        #         yaw = self.yaw_samples[i]
-        #         pitch = np.pi/2 - self.pitch_samples[j]
-        #         self.set_next_next_step_location(pitch, yaw)
-        #         temp_state = self.get_temp_state()
-        #         with torch.no_grad():
-        #             value, _, _, _ = actor_critic.act(
-        #                 torch.from_numpy(temp_state).float().unsqueeze(0), None, None, deterministic=True
-        #             )
-        #         value_array[i,j] = -value.squeeze().cpu().numpy()/5
-
-        # exp_array = np.exp(value_array)
         if self.update_terrain:
             self.yaw_pitch_prob = sample_prob
             self.update_terrain_info()
-            #print(self.yaw_pitch_prob)
 
     def update_curriculum(self, curriculum):
         self.curriculum = min(curriculum, 5)
@@ -599,7 +579,12 @@ class CassieStepperEnv(CassieEnv):
         base_yaw = self.terrain_info[self.next_step_index, 3]
 
         yaw = yaw + base_yaw
-        x = next_step_xyz[0] + dr * np.sin(pitch) * np.cos(yaw + base_phi)
+
+        # clip to prevent overlapping
+        dx = dr * np.sin(pitch) * np.cos(yaw + base_phi)
+        dx = min(max(dx, self.step_radius * 3), self.r_range[1])
+
+        x = next_step_xyz[0] + dx
         y = next_step_xyz[1] + dr * np.sin(pitch) * np.sin(yaw + base_phi)
         z = next_step_xyz[2] + dr * np.cos(pitch)
 
