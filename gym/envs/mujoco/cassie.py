@@ -19,7 +19,17 @@ RAD2DEG = 180 / np.pi
 
 class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
     def __init__(self):
+        self.lower_joint_limit = np.array([-15, -22.5, -50, -167, -140, -22.5, -22.5, -50, -167, -140]) * np.pi / 180
+        self.upper_joint_limit = np.array([22.5, 22.5, 80, -37, -30, 15, 22.5, 80, -37, -30]) * np.pi / 180
         self.init_x = 0
+        self.actuator_pos_index = [7, 8, 9, 14, 20, 21, 22, 23, 28, 34]
+        self.actuator_vel_index = [6, 7, 8, 12, 18, 19, 20, 21, 25, 31]
+        self.pos_index = np.array(
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 16, 20, 21, 22, 23, 28, 29, 30, 34]
+        )
+        self.vel_index = np.array(
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 13, 14, 18, 19, 20, 21, 25, 26, 27, 31]
+        )
         self.P = np.array(
             [
                 100 / 25,
@@ -77,18 +87,13 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         qpos = self.sim.data.qpos
         qvel = self.sim.data.qvel
         ref_pos, ref_vel = self.get_kin_next_state()
-        pos_index = np.array(
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 16, 20, 21, 22, 23, 28, 29, 30, 34]
-        )
-        vel_index = np.array(
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 13, 14, 18, 19, 20, 21, 25, 26, 27, 31]
-        )
+        
 
         foot_xyzs = self.sim.data.body_xpos[self.foot_body_ids]
         height = self.sim.data.qpos[2] - np.min(foot_xyzs[:, 2])
 
         state = np.concatenate(
-            [qpos[pos_index], qvel[vel_index], ref_pos[pos_index], ref_vel[vel_index]]
+            [qpos[self.pos_index], qvel[self.vel_index], ref_pos[self.pos_index], ref_vel[self.vel_index]]
         )
         state[0] = 0
         state[1] = height
@@ -97,12 +102,12 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
     def step_simulation(self, action):
         qpos = self.sim.data.qpos
         qvel = self.sim.data.qvel
-        pos_index = [7, 8, 9, 14, 20, 21, 22, 23, 28, 34]
-        vel_index = [6, 7, 8, 12, 18, 19, 20, 21, 25, 31]
+        
         ref_pos, ref_vel = self.get_kin_next_state()
-        target = action + ref_pos[pos_index]
-        control = self.P * (target - qpos[pos_index]) - self.D * qvel[vel_index]
+        target = action + ref_pos[self.actuator_pos_index]
+        control = self.P * (target - qpos[self.actuator_pos_index]) - self.D * qvel[self.actuator_vel_index]
         self.do_simulation(control, self.frame_skip)
+        #print(self.check_limit())
 
         if self.viewer is not None:
             self.viewer.cam.lookat[:] = self.sim.data.qpos[0:3]
@@ -198,6 +203,14 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.viewer.cam.lookat[2] = 20
         self.viewer.cam.elevation = -20
 
+    def check_limit(self):
+        pos_index = [7, 8, 9, 14, 20, 21, 22, 23, 28, 34]
+        qpos = self.sim.data.qpos
+        violation_index = list(np.where(qpos[pos_index] <= self.lower_joint_limit + 0.001)[0])
+        violation_index +=list(np.where(qpos[pos_index] >= self.upper_joint_limit - 0.001)[0])
+        #print(qpos[pos_index] - self.lower_joint_limit, self.upper_joint_limit-qpos[pos_index])
+        return violation_index
+
     # def render(self, mode="human"):
     #     super().render(mode)
     #     self.viewer.cam.lookat[:] = self.sim.data.qpos[0:3]
@@ -231,8 +244,8 @@ class CassieStepperEnv(CassieEnv):
         )
 
         self.sample_size = 11
-        self.yaw_samples = np.linspace(-10, 10, num=self.sample_size) * DEG2RAD
-        self.pitch_samples = np.linspace(-40, 40, num=self.sample_size) * DEG2RAD
+        self.yaw_samples = np.linspace(-0, 0, num=self.sample_size) * DEG2RAD
+        self.pitch_samples = np.linspace(-30, 30, num=self.sample_size) * DEG2RAD
         self.yaw_prob = np.ones(10) * 0.1
         self.pitch_prob = np.ones(10) * 0.1
         self.yaw_pitch_prob = np.ones((self.sample_size, self.sample_size)) /(self.sample_size**2)
