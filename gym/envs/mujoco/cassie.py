@@ -30,6 +30,10 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.vel_index = np.array(
             [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 13, 14, 18, 19, 20, 21, 25, 26, 27, 31]
         )
+        self.mirror_pos_index = np.array([1, 2,3,4,5,6,21,22,23,28,29,30,34,7,8,9,14,15,16,20])
+        self.mirror_vel_index = np.array([0,1,2,3,4,5,19,20,21,25,26,27,31,6,7,8,12,13,14,18])
+        self.control_limit = np.array([4.5, 4.5, 12.2, 12.2, 0.9, 4.5, 4.5, 12.2, 12.2, 0.9])
+        self.mirror = True
         self.P = np.array(
             [
                 100 / 25,
@@ -68,7 +72,7 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.max_phase = 28
 
         # used for rendering
-        self.controller_frameskip = 60
+        self.controller_frameskip = 30
 
         # fake
         self.foot_body_ids = np.zeros(2).astype(np.int)
@@ -83,11 +87,26 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             ]
         )
 
+    def set_mirror(self, mirror):
+        self.mirror = mirror
+
     def get_state(self):
-        qpos = self.sim.data.qpos
-        qvel = self.sim.data.qvel
+        qpos = np.copy(self.sim.data.qpos)
+        qvel = np.copy(self.sim.data.qvel)
         ref_pos, ref_vel = self.get_kin_next_state()
         
+        roll, pitch, yaw = quaternion2euler(qpos[3:7])
+        matrix = np.array([
+            [np.cos(yaw), -np.sin(yaw)], 
+            [np.sin(yaw), np.cos(yaw)]
+        ])
+
+        old_qvel = qvel.copy()
+        qvel[0:2] = np.matmul(matrix, qvel[0:2])
+        yaw = 0
+        qpos[3:7] = euler2quat(z=yaw, y=pitch, x=roll)
+        if qpos[3] < 0:
+            qpos[3:7] *= -1
 
         foot_xyzs = self.sim.data.body_xpos[self.foot_body_ids]
         height = self.sim.data.qpos[2] - np.min(foot_xyzs[:, 2])
@@ -95,6 +114,35 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         state = np.concatenate(
             [qpos[self.pos_index], qvel[self.vel_index], ref_pos[self.pos_index], ref_vel[self.vel_index]]
         )
+
+        if self.mirror and self.phase >= 14:
+            # ref_vel[1] = -ref_vel[1]
+            # ref_euler = quaternion2euler(ref_pos[3:7])
+            # ref_euler[0] = -ref_euler[0]
+            # ref_euler[2] = -ref_euler[2]
+            # ref_pos[3:7] = euler2quat(z=ref_euler[2],y=ref_euler[1],x=ref_euler[0])
+            
+            euler = quaternion2euler(qpos[3:7])
+            euler[0] = euler[0]
+            euler[2] = -euler[2]
+            qpos[3:7] = euler2quat(z=euler[2],y=euler[1],x=euler[0])
+            qvel[1] *= -1
+            qvel[3] *= -1
+            qvel[5] *= -1
+            motor_pos = np.zeros(10)
+            motor_pos[0:5] = np.copy(qpos[self.actuator_pos_index[5:10]])
+            motor_pos[5:10] = np.copy(qpos[self.actuator_pos_index[0:5]])
+            motor_pos[0:2] *= -1
+            motor_pos[5:7] *= -1
+            motor_vel = np.zeros(10)
+            motor_vel[0:5] = np.copy(qpos[self.actuator_vel_index[5:10]])
+            motor_vel[5:10] = np.copy(qpos[self.actuator_vel_index[0:5]])
+            motor_vel[0:2] *= -1
+            motor_vel[5:7] *= -1
+            qpos[self.actuator_pos_index] = motor_pos
+            qvel[self.actuator_vel_index] = motor_vel
+            state = np.concatenate([qpos[self.mirror_pos_index], qvel[self.vel_index], ref_pos[self.mirror_pos_index], ref_vel[self.mirror_vel_index]])
+
         state[0] = 0
         state[1] = height
         return state
@@ -104,10 +152,22 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         qvel = self.sim.data.qvel
         
         ref_pos, ref_vel = self.get_kin_next_state()
+
         target = action + ref_pos[self.actuator_pos_index]
+        if self.mirror and self.phase >= 14:
+            mirror_action = np.zeros(10)
+            mirror_action[0:5] = np.copy(action[5:10])
+            mirror_action[5:10] = np.copy(action[0:5])
+            mirror_action[0] = -mirror_action[0]
+            mirror_action[1] = -mirror_action[1]
+            mirror_action[5] = -mirror_action[5]
+            mirror_action[6] = -mirror_action[6]
+            target = mirror_action + ref_pos[self.actuator_pos_index]
         control = self.P * (target - qpos[self.actuator_pos_index]) - self.D * qvel[self.actuator_vel_index]
+        # for index in np.where(abs(control) > self.control_limit)[0]:
+        #     print("control limit reached", index, control[index])
         self.do_simulation(control, self.frame_skip)
-        #print(self.check_limit())
+        #self.check_limit()
 
         if self.viewer is not None:
             self.viewer.cam.lookat[:] = self.sim.data.qpos[0:3]
@@ -141,6 +201,16 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         ) * self.counter
         pose[1] = 0
         vel = np.copy(self.trajectory.qvel[self.phase * 2 * 30])
+        pose[3] = 1
+        pose[4:7] = 0
+        pose[7] = 0
+        pose[8] = 0
+        pose[21] = 0
+        pose[22] = 0
+        vel[6] = 0
+        vel[7] = 0
+        vel[19] = 0
+        vel[20] = 0
         return pose, vel
 
     def get_kin_next_state(self):
@@ -151,6 +221,16 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             self.trajectory.qpos[1681, 0] - self.trajectory.qpos[0, 0]
         ) * self.counter
         pose[1] = 0
+        pose[3] = 1
+        pose[4:7] = 0
+        pose[7] = 0
+        pose[8] = 0
+        pose[21] = 0
+        pose[22] = 0
+        vel[6] = 0
+        vel[7] = 0
+        vel[19] = 0
+        vel[20] = 0
         return pose, vel
 
     def compute_reward(self):
@@ -185,9 +265,11 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
         return total_reward
 
-    def reset(self, height_offset=0):
-        self.phase = np.random.randint(0, 27)
-        self.phase = 9
+    def reset(self, height_offset=0, phase=None):
+        if phase == None:
+            self.phase = self.np_random.randint(0, 27)
+        else:
+            self.phase = phase
         self.time = 0
         self.counter = 0
         qpos, qvel = self.get_kin_state()
@@ -206,10 +288,11 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
     def check_limit(self):
         pos_index = [7, 8, 9, 14, 20, 21, 22, 23, 28, 34]
         qpos = self.sim.data.qpos
-        violation_index = list(np.where(qpos[pos_index] <= self.lower_joint_limit + 0.001)[0])
-        violation_index +=list(np.where(qpos[pos_index] >= self.upper_joint_limit - 0.001)[0])
+        violation_index = list(np.where(qpos[pos_index] <= self.lower_joint_limit + 1e-7)[0])
+        violation_index +=list(np.where(qpos[pos_index] >= self.upper_joint_limit - 1e-7)[0])
         #print(qpos[pos_index] - self.lower_joint_limit, self.upper_joint_limit-qpos[pos_index])
-        return violation_index
+        for index in (violation_index):
+            print(violation_index, qpos[pos_index[index]]-self.lower_joint_limit[index], self.upper_joint_limit[index]-qpos[pos_index[index]])
 
     # def render(self, mode="human"):
     #     super().render(mode)
@@ -242,10 +325,11 @@ class CassieStepperEnv(CassieEnv):
         self.base_phi = DEG2RAD * np.array(
             [-10] + [20, -20] * (self.n_steps // 2 - 1) + [10]
         )
+        self.mirror = True
 
         self.sample_size = 11
-        self.yaw_samples = np.linspace(-0, 0, num=self.sample_size) * DEG2RAD
-        self.pitch_samples = np.linspace(-30, 30, num=self.sample_size) * DEG2RAD
+        self.yaw_samples = np.linspace(-10, 10, num=self.sample_size) * DEG2RAD
+        self.pitch_samples = np.linspace(-0, 0, num=self.sample_size) * DEG2RAD
         self.yaw_prob = np.ones(10) * 0.1
         self.pitch_prob = np.ones(10) * 0.1
         self.yaw_pitch_prob = np.ones((self.sample_size, self.sample_size)) /(self.sample_size**2)
@@ -259,8 +343,10 @@ class CassieStepperEnv(CassieEnv):
             hidden_layer=[256, 256],
             num_contact=2,
         )
-
-        state_dict = torch.load(os.path.join(current_dir, "cassie_gym_seed8.pt"))
+        if self.mirror:
+            state_dict = torch.load(os.path.join(current_dir, "Cassie_mirror.pt"))
+        else:
+            state_dict = torch.load(os.path.join(current_dir, "cassie_gym_seed8.pt"))
         self.base_model.load_state_dict(state_dict)
 
         super().__init__()
@@ -306,9 +392,9 @@ class CassieStepperEnv(CassieEnv):
         p_range = np.array([90 - pitch_limit, 90 + pitch_limit]) * DEG2RAD
         t_range = np.array([-tilt_limit, tilt_limit]) * DEG2RAD
 
-        dr = np.random.uniform(*self.r_range, size=n_steps)
-        dphi = np.random.uniform(*y_range, size=n_steps)
-        dtheta = np.random.uniform(*p_range, size=n_steps)
+        dr = self.np_random.uniform(*self.r_range, size=n_steps)
+        dphi = self.np_random.uniform(*y_range, size=n_steps)
+        dtheta = self.np_random.uniform(*p_range, size=n_steps)
 
         first_x = min(self.sim.data.body_xpos[self.foot_body_ids][:, 0])
         second_x = max(self.sim.data.body_xpos[self.foot_body_ids][:, 0]) - first_x
@@ -321,8 +407,8 @@ class CassieStepperEnv(CassieEnv):
         dphi[1] = 0.0
         dtheta[1] = np.pi / 2
 
-        x_tilt = np.random.uniform(*t_range, size=n_steps)
-        y_tilt = np.random.uniform(*t_range, size=n_steps)
+        x_tilt = self.np_random.uniform(*t_range, size=n_steps)
+        y_tilt = self.np_random.uniform(*t_range, size=n_steps)
 
         dphi = np.cumsum(dphi)
 
@@ -365,7 +451,7 @@ class CassieStepperEnv(CassieEnv):
         self.next_step_index = 0
         self.target_reached_count = 0
 
-        obs = super().reset(height_offset=self.initial_height)
+        obs = super().reset(height_offset=self.initial_height, phase=9)
         self.randomize_terrain()
 
         self.targets = self.delta_to_k_targets(k=self.lookahead)
@@ -390,7 +476,13 @@ class CassieStepperEnv(CassieEnv):
         self.calc_step_state()
 
         self.targets = self.delta_to_k_targets(k=self.lookahead)
-        state = np.concatenate((obs, self.targets.flatten()))
+        obs_target = np.copy(self.targets)
+        #print(obs_target)
+
+        if self.mirror and self.phase >= 14:
+            obs_target[:, [0, 3]] *= -1
+
+        state = np.concatenate((obs, obs_target.flatten()))
 
         self.update_terrain = (cur_step_index != self.next_step_index)
 
@@ -426,7 +518,7 @@ class CassieStepperEnv(CassieEnv):
 
     def sample_next_next_step(self):
         pairs = np.indices(dimensions=(self.sample_size,self.sample_size))
-        inds = np.random.choice(np.arange(self.sample_size**2), p=self.yaw_pitch_prob.reshape(-1),size=1,replace=False)
+        inds = self.np_random.choice(np.arange(self.sample_size**2), p=self.yaw_pitch_prob.reshape(-1),size=1,replace=False)
 
         inds = pairs.reshape(2, self.sample_size**2)[:, inds].squeeze()
         #print(self.yaw_pitch_prob, inds)
@@ -472,14 +564,18 @@ class CassieStepperEnv(CassieEnv):
     def update_specialist(self, specialist):
         self.specialist = min(specialist, 5)
         prev_specialist = self.specialist - 1
+        #print((self.specialist * 2 + 1)**2 - (prev_specialist*2+1)**2)
         half_size = (self.sample_size-1)//2
-        prob = 1.0 / ((self.specialist * 2 + 1)**2 - (prev_specialist*2+1)**2)
+        if specialist == 0:
+            prob = 1
+        else:
+            prob = 1.0 / ((self.specialist * 2 + 1)**2 - (prev_specialist*2+1)**2)
         window = slice(half_size-self.specialist, half_size+self.specialist+1)
         prev_window = slice(half_size-prev_specialist, half_size+prev_specialist+1)
         self.yaw_pitch_prob *= 0
         self.yaw_pitch_prob[window, window] = prob
         self.yaw_pitch_prob[prev_window, prev_window] = 0
-        print(self.yaw_pitch_prob)
+        print(np.round(self.yaw_pitch_prob, 2))
 
 
     def calc_potential(self):
@@ -499,7 +595,7 @@ class CassieStepperEnv(CassieEnv):
         ) ** (1 / 2)
 
         self.linear_potential = -self.distance_to_target / (
-            1.0 / self.controller_frameskip
+            1.0 / 60
         )
 
     def calc_progress_reward(self):
@@ -577,7 +673,6 @@ class CassieStepperEnv(CassieEnv):
             ),
             axis=1,
         )
-
         # Normalize targets x,y to between -1 and +1 using softsign
         # deltas[:, 0:2] /= 1 + np.abs(deltas[:, 0:2])
 
@@ -587,7 +682,7 @@ class CassieStepperEnv(CassieEnv):
 
         next_step_xyz = self.terrain_info[self.next_step_index]
 
-        dr = np.random.uniform(*self.r_range)
+        dr = self.np_random.uniform(*self.r_range)
         base_phi = self.base_phi[self.next_step_index + 1]
         base_yaw = self.terrain_info[self.next_step_index, 3]
 
@@ -600,6 +695,8 @@ class CassieStepperEnv(CassieEnv):
         x = next_step_xyz[0] + dx
         y = next_step_xyz[1] + dr * np.sin(pitch) * np.sin(yaw + base_phi)
         z = next_step_xyz[2] + dr * np.cos(pitch)
+
+        #print(dx, dr * np.sin(pitch) * np.sin(yaw + base_phi), dr * np.cos(pitch))
 
         self.terrain_info[self.next_step_index + 1, 0] = x
         self.terrain_info[self.next_step_index + 1, 1] = y
