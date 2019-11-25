@@ -334,7 +334,7 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
     # def render(self, mode="human"):
     #     super().render(mode)
-    #     self.viewer.cam.lookat[:] = self.sim.data.qpos[0:3]
+    #     self.set_key_handler()
 
 
 class CassieStepperEnv(CassieEnv):
@@ -368,8 +368,6 @@ class CassieStepperEnv(CassieEnv):
         self.sample_size = 11
         self.yaw_samples = np.linspace(-10, 10, num=self.sample_size) * DEG2RAD
         self.pitch_samples = np.linspace(-50, 50, num=self.sample_size) * DEG2RAD
-        self.yaw_prob = np.ones(10) * 0.1
-        self.pitch_prob = np.ones(10) * 0.1
         self.yaw_pitch_prob = np.ones((self.sample_size, self.sample_size)) /(self.sample_size**2)
 
         from gym.envs.mujoco.model import ActorCriticNet
@@ -553,12 +551,6 @@ class CassieStepperEnv(CassieEnv):
         self.model.body_pos[body_index, 2] -= self.step_half_height    
         
         phi, x_tilt, y_tilt = self.terrain_info[next_next_step, 3:6]
-        base_phi = self.base_phi[self.next_step_index-1]
-        # print("phi", phi * RAD2DEG)
-        # print("base", base_phi * RAD2DEG)
-
-
-        #self.model.body_quat[body_index, :] = euler2quat(phi, y_tilt, x_tilt)
         x, y, z, w = pybullet.getQuaternionFromEuler((x_tilt, y_tilt, phi))
         self.model.body_quat[body_index, :] = (w, x, y, z)
         self.targets = self.delta_to_k_targets(k=self.lookahead)
@@ -743,7 +735,7 @@ class CassieStepperEnv(CassieEnv):
 
         # clip to prevent overlapping
         dx = dr * np.sin(pitch) * np.cos(yaw + base_phi)
-        dx = np.sign(dx) * min(max(abs(dx), self.step_radius * 3), self.r_range[1])
+        dx = np.sign(dx) * min(max(abs(dx), self.step_radius * 3.5), self.r_range[1])
 
         x = next_step_xyz[0] + dx
         y = next_step_xyz[1] + dr * np.sin(pitch) * np.sin(yaw + base_phi)
