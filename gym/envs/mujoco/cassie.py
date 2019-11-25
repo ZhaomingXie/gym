@@ -12,6 +12,7 @@ from gym import utils
 from gym.envs.mujoco.loadstep import CassieTrajectory
 import numpy as np
 import torch
+import pybullet
 
 DEG2RAD = np.pi / 180
 RAD2DEG = 180 / np.pi
@@ -65,6 +66,16 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.trajectory = CassieTrajectory(
             os.path.join(current_dir, "trajectory", "stepdata.bin")
         )
+        for i in range(841):
+            self.trajectory.qpos[i][7:21] = np.copy(self.trajectory.qpos[(i+841)][21:35])
+            self.trajectory.qvel[i][6:19] = np.copy(self.trajectory.qpos[(i+841)][19:32])
+            self.trajectory.qpos[i][12] = -self.trajectory.qpos[i][12]
+            self.trajectory.qpos[i][21:35] = np.copy(self.trajectory.qpos[(i+841)][7:21])
+            self.trajectory.qvel[i][19:32] = np.copy(self.trajectory.qpos[(i+841)][6:19])
+            self.trajectory.qpos[i][26] = -self.trajectory.qpos[i][26]
+        for i in range(1682):
+            self.trajectory.qpos[i][2] = 1.05
+            #self.trajectory.qvel[i] *= 0
         self.time = 0
         self.phase = 0
         self.counter = 0
@@ -94,25 +105,34 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         qpos = np.copy(self.sim.data.qpos)
         qvel = np.copy(self.sim.data.qvel)
         ref_pos, ref_vel = self.get_kin_next_state()
-        
-        roll, pitch, yaw = quaternion2euler(qpos[3:7])
+
+        import pybullet
+        w, x, y, z = qpos[3:7]
+        roll, pitch, yaw = pybullet.getEulerFromQuaternion((x, y, z, w))
+        #roll, pitch, yaw = quaternion2euler(qpos[3:7])
+        #print(roll - roll1, pitch - pitch1, yaw - yaw1)
         matrix = np.array([
-            [np.cos(yaw), -np.sin(yaw)], 
-            [np.sin(yaw), np.cos(yaw)]
+            [np.cos(-yaw), -np.sin(-yaw)], 
+            [np.sin(-yaw), np.cos(-yaw)]
         ])
 
-        old_qvel = qvel.copy()
-        qvel[0:2] = np.matmul(matrix, qvel[0:2])
+        #old_qvel = qvel.copy()
+        qvel[0:2] = np.dot(matrix, qvel[0:2])
+        ##qvel[3:5] = np.dot(matrix, qvel[3:5])
         yaw = 0
-        qpos[3:7] = euler2quat(z=yaw, y=pitch, x=roll)
+        
+        #qpos[3:7] = euler2quat(z=0, y=pitch, x=roll)
+        x, y, z, w = pybullet.getQuaternionFromEuler(np.array([roll, pitch, yaw]))
+        qpos[3:7] = (w, x, y, z)
+        #print("2", pybullet.getEulerFromQuaternion(qpos[3:7]))
         if qpos[3] < 0:
-            qpos[3:7] *= -1
+             qpos[3:7] *= -1
 
         foot_xyzs = self.sim.data.body_xpos[self.foot_body_ids]
         height = self.sim.data.qpos[2] - np.min(foot_xyzs[:, 2])
 
         state = np.concatenate(
-            [qpos[self.pos_index], qvel[self.vel_index], ref_pos[self.pos_index], ref_vel[self.vel_index]]
+            [qpos[self.pos_index], qvel[self.vel_index], [self.phase/28.0]]
         )
 
         if self.mirror and self.phase >= 14:
@@ -122,10 +142,18 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             # ref_euler[2] = -ref_euler[2]
             # ref_pos[3:7] = euler2quat(z=ref_euler[2],y=ref_euler[1],x=ref_euler[0])
             
-            euler = quaternion2euler(qpos[3:7])
-            euler[0] = euler[0]
-            euler[2] = -euler[2]
-            qpos[3:7] = euler2quat(z=euler[2],y=euler[1],x=euler[0])
+            # euler = quaternion2euler(qpos[3:7])
+            # euler[0] = -euler[0]
+            # euler[2] = -euler[2]
+            # qpos[3:7] = euler2quat(z=euler[2],y=euler[1],x=euler[0])
+
+            w, x, y, z = qpos[3:7]
+            roll, pitch, yaw = pybullet.getEulerFromQuaternion((x, y, z, w))
+            roll *= -1
+            yaw *= -1
+            x, y, z, w = pybullet.getQuaternionFromEuler(np.array([roll, pitch, yaw]))
+            qpos[3:7] = (w, x, y, z)
+            
             qvel[1] *= -1
             qvel[3] *= -1
             qvel[5] *= -1
@@ -141,7 +169,7 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             motor_vel[5:7] *= -1
             qpos[self.actuator_pos_index] = motor_pos
             qvel[self.actuator_vel_index] = motor_vel
-            state = np.concatenate([qpos[self.mirror_pos_index], qvel[self.vel_index], ref_pos[self.mirror_pos_index], ref_vel[self.mirror_vel_index]])
+            state = np.concatenate([qpos[self.mirror_pos_index], qvel[self.vel_index], [(self.phase % 14)/28.0]])
 
         state[0] = 0
         state[1] = height
@@ -207,6 +235,7 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         pose[8] = 0
         pose[21] = 0
         pose[22] = 0
+        vel[1:6] = 0
         vel[6] = 0
         vel[7] = 0
         vel[19] = 0
@@ -227,6 +256,7 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         pose[8] = 0
         pose[21] = 0
         pose[22] = 0
+        vel[1:6] = 0
         vel[6] = 0
         vel[7] = 0
         vel[19] = 0
@@ -274,6 +304,14 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.counter = 0
         qpos, qvel = self.get_kin_state()
         qpos[2] += height_offset
+        #qvel[1] = 0.5
+        #q = euler2quat(z=-1.57, y=0,x=0)
+        #import pybullet
+        #x, y, z, w = pybullet.getQuaternionFromEuler((0, 0, np.pi / 2))
+        #qpos[3:7] = q#(w, x, y, z)
+        #qvel[3] = 10
+        #qvel[0] = 0
+        #qvel[1] = -1
         self.set_state(qpos, qvel)
         foot_xyzs = self.sim.data.body_xpos[self.foot_body_ids]
         self.init_x = np.mean(foot_xyzs[:, 0])
@@ -304,7 +342,7 @@ class CassieStepperEnv(CassieEnv):
         self.lookahead = 2
         self.next_step_index = 0
         self.target_reached_count = 0
-        self.stop_frames = 0
+        # self.stop_frames = 0
         self.step_bonus = 0
 
         self.n_steps = 50
@@ -313,7 +351,7 @@ class CassieStepperEnv(CassieEnv):
         self.tilt_limit = 0
         self.r_range = np.array([0.35, 0.45])
 
-        self.step_radius = 0.12  # xml
+        self.step_radius = 0.10  # xml
         self.step_half_height = 0.1  # xml
         self.rendered_step_count = 4  # xml
         self.initial_height = 20
@@ -329,7 +367,7 @@ class CassieStepperEnv(CassieEnv):
 
         self.sample_size = 11
         self.yaw_samples = np.linspace(-10, 10, num=self.sample_size) * DEG2RAD
-        self.pitch_samples = np.linspace(-0, 0, num=self.sample_size) * DEG2RAD
+        self.pitch_samples = np.linspace(-50, 50, num=self.sample_size) * DEG2RAD
         self.yaw_prob = np.ones(10) * 0.1
         self.pitch_prob = np.ones(10) * 0.1
         self.yaw_pitch_prob = np.ones((self.sample_size, self.sample_size)) /(self.sample_size**2)
@@ -338,18 +376,20 @@ class CassieStepperEnv(CassieEnv):
 
         Net = ActorCriticNet
         self.base_model = Net(
-            80,  # observation dim
+            41,  # observation dim
             10,  # action dim
             hidden_layer=[256, 256],
             num_contact=2,
         )
         if self.mirror:
-            state_dict = torch.load(os.path.join(current_dir, "Cassie_mirror.pt"))
+            state_dict = torch.load(os.path.join(current_dir, "Cassie_mirror_v2.pt"))
         else:
             state_dict = torch.load(os.path.join(current_dir, "cassie_gym_seed8.pt"))
         self.base_model.load_state_dict(state_dict)
 
         super().__init__()
+
+        self.stop_frames = 3 # 3
 
         self.all_contact_geom_ids = {
             self.sim.model.geom_bodyid[self.model._geom_name2id[key]]: key
@@ -378,7 +418,9 @@ class CassieStepperEnv(CassieEnv):
 
             self.model.body_pos[index + 1, :] = pos[:]
             self.model.body_pos[index + 1, 2] -= self.step_half_height
-            self.model.body_quat[index + 1, :] = euler2quat(phi, y_tilt, x_tilt)
+            #self.model.body_quat[index + 1, :] = euler2quat(phi, y_tilt, x_tilt)
+            x, y, z, w = pybullet.getQuaternionFromEuler((x_tilt, y_tilt, phi))
+            self.model.body_quat[index + 1, :] = (w, x, y, z)
 
     def generate_step_placements(
         self,
@@ -444,7 +486,9 @@ class CassieStepperEnv(CassieEnv):
             self.model.body_pos[oldest + 1, :] = pos[:]
             # account for half height
             self.model.body_pos[oldest + 1, 2] -= self.step_half_height
-            self.model.body_quat[oldest + 1, :] = euler2quat(phi, y_tilt, x_tilt)
+            #self.model.body_quat[oldest + 1, :] = euler2quat(phi, y_tilt, x_tilt)
+            x, y, z, w = pybullet.getQuaternionFromEuler((x_tilt, y_tilt, phi))
+            self.model.body_quat[oldest + 1, :] = (w, x, y, z)
 
     def reset(self):
 
@@ -507,8 +551,16 @@ class CassieStepperEnv(CassieEnv):
         self.model.body_pos[body_index, :] = self.terrain_info[next_next_step, 0:3]
         # account for half height
         self.model.body_pos[body_index, 2] -= self.step_half_height    
+        
         phi, x_tilt, y_tilt = self.terrain_info[next_next_step, 3:6]
-        self.model.body_quat[body_index, :] = euler2quat(phi, y_tilt, x_tilt)
+        base_phi = self.base_phi[self.next_step_index-1]
+        # print("phi", phi * RAD2DEG)
+        # print("base", base_phi * RAD2DEG)
+
+
+        #self.model.body_quat[body_index, :] = euler2quat(phi, y_tilt, x_tilt)
+        x, y, z, w = pybullet.getQuaternionFromEuler((x_tilt, y_tilt, phi))
+        self.model.body_quat[body_index, :] = (w, x, y, z)
         self.targets = self.delta_to_k_targets(k=self.lookahead)
 
     def get_temp_state(self):
@@ -586,8 +638,9 @@ class CassieStepperEnv(CassieEnv):
         )
         walk_target_delta = self.walk_target - self.sim.data.qpos[0:3]
 
+        w, x, y, z = np.copy(self.sim.data.qpos[3:7])
         self.angle_to_target = (
-            walk_target_theta - quaternion2euler(self.sim.data.qpos[3:7])[2]
+            walk_target_theta - pybullet.getEulerFromQuaternion((x, y, z, w))[2]
         )
 
         self.distance_to_target = (
@@ -638,7 +691,7 @@ class CassieStepperEnv(CassieEnv):
             if self.target_reached_count >= self.stop_frames:
                 self.next_step_index += 1
                 self.target_reached_count = 0
-                self.update_steps()
+                # self.update_steps()
 
             # Prevent out of bound
             if self.next_step_index >= len(self.terrain_info):
@@ -660,7 +713,8 @@ class CassieStepperEnv(CassieEnv):
         deltas = targets[:, 0:3] - self.sim.data.qpos[0:3]
         target_thetas = np.arctan2(deltas[:, 1], deltas[:, 0])
 
-        angle_to_targets = target_thetas - quaternion2euler(self.sim.data.qpos[3:7])[2]
+        w, x, y, z = np.copy(self.sim.data.qpos[3:7])
+        angle_to_targets = target_thetas - pybullet.getEulerFromQuaternion((x, y, z, w))[2]
         distance_to_targets = np.linalg.norm(deltas[:, 0:2], ord=2, axis=1)
 
         deltas = np.stack(
@@ -679,7 +733,6 @@ class CassieStepperEnv(CassieEnv):
         return deltas
 
     def set_next_next_step_location(self, pitch, yaw):
-
         next_step_xyz = self.terrain_info[self.next_step_index]
 
         dr = self.np_random.uniform(*self.r_range)
@@ -690,7 +743,7 @@ class CassieStepperEnv(CassieEnv):
 
         # clip to prevent overlapping
         dx = dr * np.sin(pitch) * np.cos(yaw + base_phi)
-        dx = min(max(dx, self.step_radius * 3), self.r_range[1])
+        dx = np.sign(dx) * min(max(abs(dx), self.step_radius * 3), self.r_range[1])
 
         x = next_step_xyz[0] + dx
         y = next_step_xyz[1] + dr * np.sin(pitch) * np.sin(yaw + base_phi)
