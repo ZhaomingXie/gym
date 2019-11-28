@@ -307,14 +307,17 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         #qvel[1] = 0.5
         #q = euler2quat(z=-1.57, y=0,x=0)
         #import pybullet
-        #x, y, z, w = pybullet.getQuaternionFromEuler((0, 0, np.pi / 2))
-        #qpos[3:7] = q#(w, x, y, z)
+        # x, y, z, w = pybullet.getQuaternionFromEuler((0, 0, np.pi))
+        # qpos[3:7] = (w, x, y, z)
         #qvel[3] = 10
-        #qvel[0] = 0
+        #qpos[0] -= 0.2
         #qvel[1] = -1
+        # qvel[0] = -1
+        # qvel[1] = 0
         self.set_state(qpos, qvel)
         foot_xyzs = self.sim.data.body_xpos[self.foot_body_ids]
         self.init_x = np.mean(foot_xyzs[:, 0])
+        #import time; time.sleep(2)
         return self.get_state()
 
     def viewer_setup(self):
@@ -333,8 +336,7 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             print(violation_index, qpos[pos_index[index]]-self.lower_joint_limit[index], self.upper_joint_limit[index]-qpos[pos_index[index]])
 
     # def render(self, mode="human"):
-    #     super().render(mode)
-    #     self.set_key_handler()
+    #     super().render(width=600, height=400, mode=mode)
 
 
 class CassieStepperEnv(CassieEnv):
@@ -358,6 +360,7 @@ class CassieStepperEnv(CassieEnv):
 
         self.terrain_info = np.zeros((self.n_steps, 6))
         self.linear_potential = 0
+        self.angular_potential = 0
         self.walk_target = np.zeros(3)
 
         self.base_phi = DEG2RAD * np.array(
@@ -367,9 +370,10 @@ class CassieStepperEnv(CassieEnv):
 
         self.sample_size = 11
         self.yaw_samples = np.linspace(-10, 10, num=self.sample_size) * DEG2RAD
-        self.pitch_samples = np.linspace(-50, 50, num=self.sample_size) * DEG2RAD
+        self.pitch_samples = np.linspace(-20, 20, num=self.sample_size) * DEG2RAD
         self.yaw_pitch_prob = np.ones((self.sample_size, self.sample_size)) /(self.sample_size**2)
-
+        self.avg_prob = np.zeros((self.sample_size, self.sample_size))
+        self.av_size = 0
         from gym.envs.mujoco.model import ActorCriticNet
 
         Net = ActorCriticNet
@@ -501,6 +505,10 @@ class CassieStepperEnv(CassieEnv):
         self.calc_potential()
         state = np.concatenate((obs, self.targets.flatten()))
 
+        #print(self.avg_prob / self.av_size)
+        self.avg_prob *= 0
+        self.av_size = 0
+
         return state
 
     def step(self, action):
@@ -593,6 +601,8 @@ class CassieStepperEnv(CassieEnv):
         if self.update_terrain:
             self.yaw_pitch_prob = sample_prob
             self.update_terrain_info()
+            self.avg_prob += sample_prob
+            self.av_size += 1
 
     def update_curriculum(self, curriculum):
         self.curriculum = min(curriculum, 5)
@@ -634,6 +644,7 @@ class CassieStepperEnv(CassieEnv):
         self.angle_to_target = (
             walk_target_theta - pybullet.getEulerFromQuaternion((x, y, z, w))[2]
         )
+        #print("yaw", pybullet.getEulerFromQuaternion((x, y, z, w))[2], walk_target_theta, self.walk_target[1] - self.sim.data.qpos[1], self.walk_target[0] - self.sim.data.qpos[0])
 
         self.distance_to_target = (
             walk_target_delta[0] ** 2 + walk_target_delta[1] ** 2
@@ -642,11 +653,17 @@ class CassieStepperEnv(CassieEnv):
         self.linear_potential = -self.distance_to_target / (
             1.0 / 60
         )
+        #self.angular_potential = np.cos(self.angle_to_target)
+        self.angular_potential = -(self.angle_to_target)**2 / (1.0/60)
+        #print(self.angle_to_target, self.angular_potential)
 
     def calc_progress_reward(self):
         old_linear_potential = self.linear_potential
+        old_angular_potential = self.angular_potential
         self.calc_potential()
         linear_progress = self.linear_potential - old_linear_potential
+        angular_progress = self.angular_potential - old_angular_potential
+        #print(linear_progress, angular_progress)
         self.progress = linear_progress
 
     def calc_step_state(self):
@@ -700,8 +717,6 @@ class CassieStepperEnv(CassieEnv):
 
         self.walk_target = targets[[1], 0:3].mean(axis=0)
 
-        # self.walk_target = targets[[1], 0:3].mean(axis=0)
-
         deltas = targets[:, 0:3] - self.sim.data.qpos[0:3]
         target_thetas = np.arctan2(deltas[:, 1], deltas[:, 0])
 
@@ -719,9 +734,8 @@ class CassieStepperEnv(CassieEnv):
             ),
             axis=1,
         )
-        # Normalize targets x,y to between -1 and +1 using softsign
-        # deltas[:, 0:2] /= 1 + np.abs(deltas[:, 0:2])
 
+        self.delta = deltas
         return deltas
 
     def set_next_next_step_location(self, pitch, yaw):
@@ -731,22 +745,26 @@ class CassieStepperEnv(CassieEnv):
         base_phi = self.base_phi[self.next_step_index + 1]
         base_yaw = self.terrain_info[self.next_step_index, 3]
 
-        yaw = yaw + base_yaw
-
-        # clip to prevent overlapping
         dx = dr * np.sin(pitch) * np.cos(yaw + base_phi)
+        # clip to prevent overlapping
         dx = np.sign(dx) * min(max(abs(dx), self.step_radius * 3.5), self.r_range[1])
+        dy = dr * np.sin(pitch) * np.sin(yaw + base_phi)
 
-        x = next_step_xyz[0] + dx
-        y = next_step_xyz[1] + dr * np.sin(pitch) * np.sin(yaw + base_phi)
+        matrix = np.array([
+            [np.cos(base_yaw), -np.sin(base_yaw)],
+            [np.sin(base_yaw), np.cos(base_yaw)]
+        ])
+
+        dxy = np.dot(matrix, np.concatenate(([dx], [dy])))
+
+        x = next_step_xyz[0] + dxy[0]
+        y = next_step_xyz[1] + dxy[1]
         z = next_step_xyz[2] + dr * np.cos(pitch)
-
-        #print(dx, dr * np.sin(pitch) * np.sin(yaw + base_phi), dr * np.cos(pitch))
 
         self.terrain_info[self.next_step_index + 1, 0] = x
         self.terrain_info[self.next_step_index + 1, 1] = y
         self.terrain_info[self.next_step_index + 1, 2] = z
-        self.terrain_info[self.next_step_index + 1, 3] = yaw
+        self.terrain_info[self.next_step_index + 1, 3] = yaw + base_yaw
 
 
 def euler2quat(z=0, y=0, x=0):
