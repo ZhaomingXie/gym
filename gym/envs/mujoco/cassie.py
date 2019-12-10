@@ -370,7 +370,9 @@ class CassieStepperEnv(CassieEnv):
 
         self.sample_size = 11
         self.yaw_samples = np.linspace(-10, 10, num=self.sample_size) * DEG2RAD
-        self.pitch_samples = np.linspace(-20, 20, num=self.sample_size) * DEG2RAD
+        self.pitch_samples = np.linspace(-50, 50, num=self.sample_size) * DEG2RAD
+        self.fake_yaw_samples = np.linspace(-10, 10, num=self.sample_size) * DEG2RAD
+        self.fake_pitch_samples = np.linspace(-30, 30, num=self.sample_size) * DEG2RAD
         self.yaw_pitch_prob = np.ones((self.sample_size, self.sample_size)) /(self.sample_size**2)
         self.avg_prob = np.zeros((self.sample_size, self.sample_size))
         self.av_size = 0
@@ -566,6 +568,8 @@ class CassieStepperEnv(CassieEnv):
     def get_temp_state(self):
         obs = self.get_state()
         target = self.delta_to_k_targets(k=self.lookahead)
+        if self.mirror and self.phase >= 14:
+            target[:, [0, 3]] *= -1
         return np.concatenate((obs, target.flatten()))
 
     def sample_next_next_step(self):
@@ -578,20 +582,20 @@ class CassieStepperEnv(CassieEnv):
         pitch = self.pitch_samples[inds[1]] + np.pi / 2
         self.next_next_pitch = pitch
         self.next_next_yaw = yaw
-        self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw)
+        self.dr = self.np_random.uniform(*self.r_range)
+        self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw, self.dr)
         #print(self.next_next_pitch, self.next_next_yaw = yaw)
 
     def create_temp_states(self):
         if self.update_terrain:
             temp_states = []
-            for i in range(self.yaw_samples.shape[0]):
-                for j in range(self.pitch_samples.shape[0]):
-                    yaw = self.yaw_samples[i]
-                    pitch = np.pi/2 - self.pitch_samples[j]
-                    self.set_next_next_step_location(pitch, yaw)
+            for yaw in self.fake_yaw_samples:
+                for pitch in self.fake_pitch_samples:
+                    pitch = np.pi/2 - pitch
+                    self.set_next_next_step_location(pitch, yaw, 0.35)
                     temp_state = self.get_temp_state()
                     temp_states.append(temp_state)
-            self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw)
+            self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw, self.dr)
             ret = np.stack(temp_states)
         else:
             ret = self.temp_states
@@ -629,7 +633,7 @@ class CassieStepperEnv(CassieEnv):
         self.yaw_pitch_prob *= 0
         self.yaw_pitch_prob[window, window] = prob
         self.yaw_pitch_prob[prev_window, prev_window] = 0
-        print(np.round(self.yaw_pitch_prob, 2))
+        #print(np.round(self.yaw_pitch_prob, 2))
 
 
     def calc_potential(self):
@@ -738,10 +742,13 @@ class CassieStepperEnv(CassieEnv):
         self.delta = deltas
         return deltas
 
-    def set_next_next_step_location(self, pitch, yaw):
+    def set_next_next_step_location(self, pitch, yaw, dr):
         next_step_xyz = self.terrain_info[self.next_step_index]
-
-        dr = self.np_random.uniform(*self.r_range)
+        # if random:
+        #     dr = self.np_random.uniform(*self.r_range)
+        # else:
+        #     dr = 0.35
+        dr = dr
         base_phi = self.base_phi[self.next_step_index + 1]
         base_yaw = self.terrain_info[self.next_step_index, 3]
 
