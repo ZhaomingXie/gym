@@ -351,7 +351,7 @@ class CassieStepperEnv(CassieEnv):
         self.pitch_limit = 40
         self.yaw_limit = 10
         self.tilt_limit = 0
-        self.r_range = np.array([0.35, 0.45])
+        self.r_range = np.array([0.35, 0.8])
 
         self.step_radius = 0.10  # xml
         self.step_half_height = 0.1  # xml
@@ -369,12 +369,19 @@ class CassieStepperEnv(CassieEnv):
         self.mirror = True
 
         self.sample_size = 11
-        self.yaw_samples = np.linspace(-10, 10, num=self.sample_size) * DEG2RAD
-        self.pitch_samples = np.linspace(50, 50, num=self.sample_size) * DEG2RAD
-        self.fake_yaw_samples = np.linspace(-10, 10, num=self.sample_size) * DEG2RAD
-        self.fake_pitch_samples = np.linspace(-50, 50, num=self.sample_size) * DEG2RAD
-        self.yaw_pitch_prob = np.ones((self.sample_size, self.sample_size)) /(self.sample_size**2)
-        self.avg_prob = np.zeros((self.sample_size, self.sample_size))
+        self.yaw_sample_size = 11
+        self.pitch_sample_size = 11
+        self.r_sample_size = 11
+        self.max_curriculum = 5
+        self.yaw_samples = np.linspace(0, 0, num=self.yaw_sample_size) * DEG2RAD
+        self.pitch_samples = np.linspace(-0, -0, num=self.pitch_sample_size) * DEG2RAD
+        self.r_samples = np.linspace(0.8, 0.8, num=self.r_sample_size)
+        self.fake_yaw_samples = np.linspace(-20, 20, num=self.yaw_sample_size) * DEG2RAD
+        self.fake_pitch_samples = np.linspace(-50, 50, num=self.pitch_sample_size) * DEG2RAD
+        self.fake_r_samples = np.linspace(0.35, 0.8, num=self.r_sample_size)
+        self.yaw_pitch_prob = np.ones((self.yaw_sample_size, self.pitch_sample_size)) /(self.yaw_sample_size*self.pitch_sample_size)
+        self.yaw_pitch_r_prob = np.ones((self.yaw_sample_size, self.pitch_sample_size, self.r_sample_size)) / (self.yaw_sample_size*self.pitch_sample_size * self.r_sample_size)
+        #self.avg_prob = np.zeros((self.sample_size, self.sample_size))
         self.av_size = 0
         from gym.envs.mujoco.model import ActorCriticNet
 
@@ -402,6 +409,8 @@ class CassieStepperEnv(CassieEnv):
 
         self.next_next_pitch = 0
         self.next_next_yaw = 0
+        self.next_dr = 0.35
+        self.next_next_dr = 0.35
         self.temp_states = np.zeros((self.sample_size**2, self.observation_space.shape[0]))
 
         self.curriculum = 0
@@ -506,6 +515,11 @@ class CassieStepperEnv(CassieEnv):
         self.next_step_index = 1
         self.target_reached_count = 0
 
+        self.next_next_pitch = np.pi/2
+        self.next_next_yaw = 0
+        self.next_dr = 0.35
+        self.next_next_dr = 0.35
+
         obs = super().reset(height_offset=self.initial_height, phase=9)
         self.randomize_terrain()
 
@@ -515,7 +529,7 @@ class CassieStepperEnv(CassieEnv):
         state = np.concatenate((obs, self.targets.flatten()))
 
         #print(self.avg_prob / self.av_size)
-        self.avg_prob *= 0
+        #self.avg_prob *= 0
         self.av_size = 0
 
         return state
@@ -534,14 +548,12 @@ class CassieStepperEnv(CassieEnv):
         self.calc_progress_reward()
         self.calc_step_state()
 
-        self.targets = self.delta_to_k_targets(k=self.lookahead)
-        obs_target = np.copy(self.targets)
-        #print(obs_target)
+        # self.targets = self.delta_to_k_targets(k=self.lookahead)
+        # obs_target = np.copy(self.targets)
+        # if self.mirror and self.phase >= 14:
+        #     obs_target[:, [0, 3]] *= -1
 
-        if self.mirror and self.phase >= 14:
-            obs_target[:, [0, 3]] *= -1
-
-        state = np.concatenate((obs, obs_target.flatten()))
+        #state = np.concatenate((obs, obs_target.flatten()))
 
         self.update_terrain = (cur_step_index != self.next_step_index)
 
@@ -550,6 +562,12 @@ class CassieStepperEnv(CassieEnv):
             # which is in delta_to_k_targets()
             self.update_terrain_info()
             self.calc_potential()
+
+        self.targets = self.delta_to_k_targets(k=self.lookahead)
+        obs_target = np.copy(self.targets)
+        if self.mirror and self.phase >= 14:
+            obs_target[:, [0, 3]] *= -1
+        state = np.concatenate((obs, obs_target.flatten()))
 
         # self.targets = self.delta_to_k_targets(k=self.lookahead)
         # state = np.concatenate((obs, self.targets.flatten()))
@@ -572,21 +590,6 @@ class CassieStepperEnv(CassieEnv):
         self.model.body_quat[body_index, :] = (w, x, y, z)
         self.targets = self.delta_to_k_targets(k=self.lookahead)
 
-    def update_terrain_info_fake(self):
-        # print(env.next_step_index)
-        next_step = self.next_step_index
-        # env.terrain_info[next_next_step, 2] = 30    
-        self.sample_next_step()
-        # +1 because first body is worldBody
-        body_index = next_step % self.rendered_step_count + 1
-        self.model.body_pos[body_index, :] = self.terrain_info[next_step, 0:3]
-        # account for half height
-        self.model.body_pos[body_index, 2] -= self.step_half_height    
-        
-        phi, x_tilt, y_tilt = self.terrain_info[next_step, 3:6]
-        x, y, z, w = pybullet.getQuaternionFromEuler((x_tilt, y_tilt, phi))
-        self.model.body_quat[body_index, :] = (w, x, y, z)
-        self.targets = self.delta_to_k_targets(k=self.lookahead)
 
     def get_temp_state(self):
         obs = self.get_state()
@@ -595,68 +598,124 @@ class CassieStepperEnv(CassieEnv):
             target[:, [0, 3]] *= -1
         return np.concatenate((obs, target.flatten()))
 
-    def sample_next_next_step(self):
+    def sample_next_next_step_2(self):
         #print(np.round(self.yaw_pitch_prob, 2))
-        pairs = np.indices(dimensions=(self.sample_size,self.sample_size))
-        inds = self.np_random.choice(np.arange(self.sample_size**2), p=self.yaw_pitch_prob.reshape(-1),size=1,replace=False)
-
-        inds = pairs.reshape(2, self.sample_size**2)[:, inds].squeeze()
-        #print(self.yaw_pitch_prob, inds)
+        pairs = np.indices(dimensions=(self.yaw_sample_size,self.pitch_sample_size))
+        #print("prob", np.round(self.yaw_pitch_prob, 2))
+        self.yaw_pitch_prob /= self.yaw_pitch_prob.sum() 
+        #print("prob sum", self.yaw_pitch_prob.sum())
+        inds = self.np_random.choice(np.arange(self.yaw_sample_size*self.pitch_sample_size), p=self.yaw_pitch_prob.reshape(-1),size=1,replace=False)
+        #print(inds)
+        inds = pairs.reshape(2, self.yaw_sample_size*self.pitch_sample_size)[:, inds].squeeze()
+        #print(np.round(self.yaw_pitch_prob, 2), inds)
         yaw = self.yaw_samples[inds[0]]
         pitch = self.pitch_samples[inds[1]] + np.pi / 2
+        #print(yaw * 180/ np.pi, pitch * 180 / np.pi - 90)
+        
+        self.next_pitch = self.next_next_pitch
+        self.next_yaw = self.next_next_yaw
+        self.next_dr = np.copy(self.next_next_dr)
+        
         self.next_next_pitch = pitch
         self.next_next_yaw = yaw
-        self.dr = self.np_random.uniform(*self.r_range)
-        self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw, self.dr)
-        #print(self.next_next_pitch, self.next_next_yaw = yaw)
+        self.next_next_dr = self.np_random.uniform(*self.r_range)
+        self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw, self.next_next_dr)
 
-    def sample_next_step(self):
-        pairs = np.indices(dimensions=(self.sample_size,self.sample_size))
-        inds = self.np_random.choice(np.arange(self.sample_size**2), p=self.yaw_pitch_prob.reshape(-1),size=1,replace=False)
-
-        inds = pairs.reshape(2, self.sample_size**2)[:, inds].squeeze()
-        #print(self.yaw_pitch_prob, inds)
+    def sample_next_next_step(self):
+        #print(np.round(self.yaw_pitch_prob, 2))
+        pairs = np.indices(dimensions=(self.yaw_sample_size,self.pitch_sample_size, self.r_sample_size))
+        #print("prob", np.round(self.yaw_pitch_prob, 2))
+        self.yaw_pitch_r_prob /= self.yaw_pitch_r_prob.sum() 
+        #print("prob sum", self.yaw_pitch_prob.sum())
+        inds = self.np_random.choice(np.arange(self.yaw_sample_size*self.pitch_sample_size*self.r_sample_size), p=self.yaw_pitch_r_prob.reshape(-1),size=1,replace=False)
+        #print(inds)
+        inds = pairs.reshape(3, self.yaw_sample_size*self.pitch_sample_size*self.r_sample_size)[:, inds].squeeze()
         yaw = self.yaw_samples[inds[0]]
         pitch = self.pitch_samples[inds[1]] + np.pi / 2
-        self.next_pitch = pitch
-        self.next_yaw = yaw
-        self.dr = self.np_random.uniform(*self.r_range)
-        self.set_next_step_location(self.next_pitch, self.next_yaw, self.dr)
+        dr = self.r_samples[inds[2]]
+        
+        self.next_pitch = self.next_next_pitch
+        self.next_yaw = self.next_next_yaw
+        self.next_dr = np.copy(self.next_next_dr)
+        
+        self.next_next_pitch = pitch
+        self.next_next_yaw = yaw
+        self.next_next_dr = dr
+        self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw, self.next_next_dr)
+        #print(self.next_next_pitch, self.next_next_yaw = yaw)
+
+    def create_temp_states_2(self):
+        if self.update_terrain:
+            temp_states = []
+            for yaw in self.fake_yaw_samples:
+                for pitch in self.fake_pitch_samples:
+                    actual_pitch = np.pi/2 - pitch
+                    self.set_next_step_location(actual_pitch, yaw, 0.4)
+                    self.set_next_next_step_location(np.pi/2, 0, 0.35)
+                    temp_state = self.get_temp_state()
+                    temp_states.append(temp_state)
+            self.set_next_step_location(self.next_pitch, self.next_yaw, self.next_dr)
+            self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw, self.next_next_dr)
+            ret = np.stack(temp_states)
+        else:
+            ret = self.temp_states
+        return ret
 
     def create_temp_states(self):
         if self.update_terrain:
             temp_states = []
             for yaw in self.fake_yaw_samples:
                 for pitch in self.fake_pitch_samples:
-                    pitch = np.pi/2 - pitch
-                    self.set_next_next_step_location(pitch, yaw, 0.35)
-                    #self.set_next_next_step_location(np.pi/2, 0, 0.35)
-                    temp_state = self.get_temp_state()
-                    temp_states.append(temp_state)
-            #self.set_next_step_location(self.next_pitch, self.next_yaw, self.dr)
-            self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw, self.dr)
+                    for r in self.fake_r_samples:
+                        actual_pitch = np.pi/2 - pitch
+                        self.set_next_step_location(actual_pitch, yaw, r)
+                        self.set_next_next_step_location(np.pi/2, 0, 0.35)
+                        temp_state = self.get_temp_state()
+                        temp_states.append(temp_state)
+            #print(self.fake_pitch_samples)
+            self.set_next_step_location(self.next_pitch, self.next_yaw, self.next_dr)
+            self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw, self.next_next_dr)
             ret = np.stack(temp_states)
         else:
             ret = self.temp_states
         return ret
 
-    def update_sample_prob(self, sample_prob):
+    def update_sample_prob_2(self, sample_prob):
+        self.yaw_pitch_prob = sample_prob
+        return
         if self.update_terrain:
             self.yaw_pitch_prob = sample_prob
             self.update_terrain_info()
             self.avg_prob += sample_prob
             self.av_size += 1
 
+    def update_sample_prob(self, sample_prob):
+        self.yaw_pitch_r_prob = sample_prob
+        return
+
+    def update_curriculum_2(self, curriculum):
+        self.yaw_pitch_prob *= 0
+        self.yaw_pitch_prob[(self.yaw_sample_size-1)//2, (self.pitch_sample_size-1)//2] = 1
+        # self.curriculum = min(curriculum, self.max_curriculum)
+        # half_size = (self.sample_size-1)//2
+        # if self.curriculum >= half_size:
+        #     self.curriculum = half_size
+        # self.yaw_pitch_prob *= 0
+        # prob = 1.0 / (self.curriculum * 2 + 1)**2
+        # window = slice(half_size-self.curriculum, half_size+self.curriculum+1)
+        # self.yaw_pitch_prob[window, window] = prob
+
     def update_curriculum(self, curriculum):
-        self.curriculum = min(curriculum, 5)
+        #self.yaw_pitch_r_prob *= 0
+        #self.yaw_pitch_r_prob[(self.yaw_sample_size-1)//2, (self.pitch_sample_size-1)//2, 0] = 1
+        self.curriculum = min(curriculum, self.max_curriculum)
         half_size = (self.sample_size-1)//2
         if self.curriculum >= half_size:
             self.curriculum = half_size
-        self.yaw_pitch_prob *= 0
-        prob = 1.0 / (self.curriculum * 2 + 1)**2
-        #print(self.curriculum, prob)
+        self.yaw_pitch_r_prob *= 0
+        prob = 1.0 / (self.curriculum * 2 + 1)**3
         window = slice(half_size-self.curriculum, half_size+self.curriculum+1)
-        self.yaw_pitch_prob[window, window] = prob
+        self.yaw_pitch_r_prob[window, window, 0:curriculum*2+1] = prob
 
     def update_specialist(self, specialist):
         self.specialist = min(specialist, 5)
