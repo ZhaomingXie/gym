@@ -79,7 +79,7 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.time = 0
         self.phase = 0
         self.counter = 0
-        self.time_limit = 400
+        self.time_limit = 400000
         self.max_phase = 28
 
         # used for rendering
@@ -347,15 +347,15 @@ class CassieStepperEnv(CassieEnv):
         # self.stop_frames = 0
         self.step_bonus = 0
 
-        self.n_steps = 50
-        self.pitch_limit = 40
-        self.yaw_limit = 10
+        self.n_steps = 100
+        self.pitch_limit = 25
+        self.yaw_limit = 20
         self.tilt_limit = 0
-        self.r_range = np.array([0.35, 0.8])
+        self.r_range = np.array([0.35, 1.0])
 
         self.step_radius = 0.10  # xml
         self.step_half_height = 0.1  # xml
-        self.rendered_step_count = 4  # xml
+        self.rendered_step_count = 4 # xml
         self.initial_height = 20
 
         self.terrain_info = np.zeros((self.n_steps, 6))
@@ -372,15 +372,25 @@ class CassieStepperEnv(CassieEnv):
         self.yaw_sample_size = 11
         self.pitch_sample_size = 11
         self.r_sample_size = 11
+        self.x_tilt_sample_size = 5
+        self.y_tilt_sample_size = 5
         self.max_curriculum = 5
-        self.yaw_samples = np.linspace(0, 0, num=self.yaw_sample_size) * DEG2RAD
-        self.pitch_samples = np.linspace(-0, -0, num=self.pitch_sample_size) * DEG2RAD
-        self.r_samples = np.linspace(0.8, 0.8, num=self.r_sample_size)
+        
+        self.yaw_samples = np.linspace(-20, 20, num=self.yaw_sample_size) * DEG2RAD
+        self.pitch_samples = np.linspace(-50, 50, num=self.pitch_sample_size) * DEG2RAD
+        self.r_samples = np.linspace(0.35, 1.0, num=self.r_sample_size)
+        self.x_tilt_samples = np.linspace(0, 0, num=self.x_tilt_sample_size) * DEG2RAD
+        self.y_tilt_samples = np.linspace(0, 0, num=self.y_tilt_sample_size) * DEG2RAD
+        
         self.fake_yaw_samples = np.linspace(-20, 20, num=self.yaw_sample_size) * DEG2RAD
         self.fake_pitch_samples = np.linspace(-50, 50, num=self.pitch_sample_size) * DEG2RAD
-        self.fake_r_samples = np.linspace(0.35, 0.8, num=self.r_sample_size)
+        self.fake_r_samples = np.linspace(0.35, 1.0, num=self.r_sample_size)
+        self.fake_x_tilt_samples = np.linspace(-20, 20, num=self.x_tilt_sample_size) * DEG2RAD
+        self.fake_y_tilt_samples = np.linspace(-20, 20, num=self.y_tilt_sample_size) * DEG2RAD
+        
         self.yaw_pitch_prob = np.ones((self.yaw_sample_size, self.pitch_sample_size)) /(self.yaw_sample_size*self.pitch_sample_size)
         self.yaw_pitch_r_prob = np.ones((self.yaw_sample_size, self.pitch_sample_size, self.r_sample_size)) / (self.yaw_sample_size*self.pitch_sample_size * self.r_sample_size)
+        self.yaw_pitch_r_tilt_prob = np.ones((self.yaw_sample_size, self.pitch_sample_size, self.r_sample_size, self.x_tilt_sample_size, self.y_tilt_sample_size)) / (self.yaw_sample_size*self.pitch_sample_size * self.r_sample_size * self.x_tilt_sample_size * self.y_tilt_sample_size)
         #self.avg_prob = np.zeros((self.sample_size, self.sample_size))
         self.av_size = 0
         from gym.envs.mujoco.model import ActorCriticNet
@@ -397,7 +407,7 @@ class CassieStepperEnv(CassieEnv):
         else:
             state_dict = torch.load(os.path.join(current_dir, "cassie_gym_seed8.pt"))
         self.base_model.load_state_dict(state_dict)
-
+        self.generate_planks()
         super().__init__()
 
         self.stop_frames = 3 # 3
@@ -414,6 +424,25 @@ class CassieStepperEnv(CassieEnv):
         self.temp_states = np.zeros((self.sample_size**2, self.observation_space.shape[0]))
 
         self.curriculum = 0
+
+    def generate_planks(self):
+        with open("/home/zhaoming/Documents/dev/gym/gym/envs/mujoco/assets/cassie_planks_generated.xml", "w") as f:
+            st = ""
+            st += """
+            <mujoco>
+            <worldbody>
+            """        
+            for i in np.arange(1, self.n_steps):
+                st += """
+                <body name="step{:d}" pos="10 0 11">
+                <geom pos="0 0 0" name="step{:d}" mass="0" size="{:f} {:f} 0.1" type="box" condim='3' conaffinity='15'/>
+                </body>
+                """.format(i, i, np.random.uniform(0.1, 0.1), 0.5)        
+            st += """
+                </worldbody>
+                </mujoco>
+                """
+            f.write(st)
 
     def randomize_terrain(self):
         self.terrain_info = self.generate_step_placements(
@@ -443,11 +472,14 @@ class CassieStepperEnv(CassieEnv):
         tilt_limit=10,
     ):
 
-        y_range = np.array([-yaw_limit, yaw_limit]) * DEG2RAD
-        p_range = np.array([90 - pitch_limit, 90 + pitch_limit]) * DEG2RAD
+        yaw_test = 0
+        p_test = -50
+        r_test = 0.9
+        y_range = np.array([-yaw_test, -yaw_test]) * DEG2RAD
+        p_range = np.array([90 + p_test, 90 + p_test]) * DEG2RAD
         t_range = np.array([-tilt_limit, tilt_limit]) * DEG2RAD
 
-        dr = self.np_random.uniform(*self.r_range, size=n_steps)
+        dr = self.np_random.uniform(r_test, r_test, size=n_steps)
         dphi = self.np_random.uniform(*y_range, size=n_steps)
         dtheta = self.np_random.uniform(*p_range, size=n_steps)
 
@@ -466,27 +498,41 @@ class CassieStepperEnv(CassieEnv):
         dphi[2] = 0.0
         dtheta[2] = np.pi / 2
 
+        # test_r = 0.6
+        # dr[3] = test_r
+        # dphi[3] = 0.0
+        # dtheta[3] = (90 - 50) * DEG2RAD
+
         self.next_pitch = np.pi/2
         self.next_yaw = 0
 
         x_tilt = self.np_random.uniform(*t_range, size=n_steps)
         y_tilt = self.np_random.uniform(*t_range, size=n_steps)
+        x_tilt[0:3] = 0
+        y_tilt[0:3] = 0
 
         dphi = np.cumsum(dphi)
 
+        # x_ = dr * np.sin(dtheta) * np.cos(dphi + self.base_phi)
+        # y_ = dr * np.sin(dtheta) * np.sin(dphi + self.base_phi)
+        # z_ = dr * np.cos(dtheta)
+
+        # # Prevent steps from overlapping
+        # np.clip(x_[2:], a_min=self.step_radius * 3.5, a_max=self.r_range[1], out=x_[2:])
+
+        # x = np.cumsum(x_)
+        # y = np.cumsum(y_)
+        # z = np.cumsum(z_) + self.initial_height
+
+        # min_z = self.step_radius * np.sin(self.tilt_limit * DEG2RAD) + 0.01
+        # np.clip(z, a_min=min_z, a_max=None, out=z)
         x_ = dr * np.sin(dtheta) * np.cos(dphi + self.base_phi)
+        x_[2:] = np.sign(x_[2:]) * np.minimum(np.maximum(np.abs(x_[2:]), self.step_radius * 3.5), self.r_range[1])
         y_ = dr * np.sin(dtheta) * np.sin(dphi + self.base_phi)
         z_ = dr * np.cos(dtheta)
-
-        # Prevent steps from overlapping
-        np.clip(x_[2:], a_min=self.step_radius * 3, a_max=self.r_range[1], out=x_[2:])
-
         x = np.cumsum(x_)
         y = np.cumsum(y_)
         z = np.cumsum(z_) + self.initial_height
-
-        min_z = self.step_radius * np.sin(self.tilt_limit * DEG2RAD) + 0.01
-        np.clip(z, a_min=min_z, a_max=None, out=z)
 
         return np.stack((x, y, z, dphi, x_tilt, y_tilt), axis=1)
 
@@ -519,8 +565,12 @@ class CassieStepperEnv(CassieEnv):
         self.next_next_yaw = 0
         self.next_dr = 0.35
         self.next_next_dr = 0.35
+        self.next_x_tilt = 0
+        self.next_next_x_tilt = 0
+        self.next_y_tilt = 0
+        self.next_next_y_tilt = 0
 
-        obs = super().reset(height_offset=self.initial_height, phase=9)
+        obs = super().reset(height_offset=0, phase=9)
         self.randomize_terrain()
 
         self.targets = self.delta_to_k_targets(k=self.lookahead)
@@ -576,8 +626,8 @@ class CassieStepperEnv(CassieEnv):
 
     def update_terrain_info(self):
         # print(env.next_step_index)
-        next_next_step = self.next_step_index + 1
-        # env.terrain_info[next_next_step, 2] = 30    
+        next_next_step = self.next_step_index + 1 
+
         self.sample_next_next_step()
         # +1 because first body is worldBody
         body_index = next_next_step % self.rendered_step_count + 1
@@ -598,7 +648,7 @@ class CassieStepperEnv(CassieEnv):
             target[:, [0, 3]] *= -1
         return np.concatenate((obs, target.flatten()))
 
-    def sample_next_next_step_2(self):
+    def sample_next_next_step_1(self):
         #print(np.round(self.yaw_pitch_prob, 2))
         pairs = np.indices(dimensions=(self.yaw_sample_size,self.pitch_sample_size))
         #print("prob", np.round(self.yaw_pitch_prob, 2))
@@ -642,9 +692,36 @@ class CassieStepperEnv(CassieEnv):
         self.next_next_yaw = yaw
         self.next_next_dr = dr
         self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw, self.next_next_dr)
-        #print(self.next_next_pitch, self.next_next_yaw = yaw)
 
-    def create_temp_states_2(self):
+    def sample_next_next_step_3(self):
+        #print(np.round(self.yaw_pitch_prob, 2))
+        pairs = np.indices(dimensions=(self.yaw_sample_size,self.pitch_sample_size, self.r_sample_size, self.x_tilt_sample_size, self.y_tilt_sample_size))
+        #print("prob", np.round(self.yaw_pitch_prob, 2))
+        self.yaw_pitch_r_tilt_prob /= self.yaw_pitch_r_tilt_prob.sum() 
+        #print("prob sum", self.yaw_pitch_prob.sum())
+        inds = self.np_random.choice(np.arange(self.yaw_sample_size*self.pitch_sample_size*self.r_sample_size*self.x_tilt_sample_size*self.y_tilt_sample_size), p=self.yaw_pitch_r_tilt_prob.reshape(-1),size=1,replace=False)
+        #print(inds)
+        inds = pairs.reshape(5, self.yaw_sample_size*self.pitch_sample_size*self.r_sample_size*self.x_tilt_sample_size*self.y_tilt_sample_size)[:, inds].squeeze()
+        yaw = self.yaw_samples[inds[0]]
+        pitch = self.pitch_samples[inds[1]] + np.pi / 2
+        dr = self.r_samples[inds[2]]
+        x_tilt = self.x_tilt_samples[inds[3]]
+        y_tilt = self.y_tilt_samples[inds[4]]
+        
+        self.next_pitch = self.next_next_pitch
+        self.next_yaw = self.next_next_yaw
+        self.next_dr = np.copy(self.next_next_dr)
+        self.next_x_tilt = np.copy(self.next_next_x_tilt)
+        self.next_y_tilt = np.copy(self.next_next_y_tilt)
+        
+        self.next_next_pitch = pitch
+        self.next_next_yaw = yaw
+        self.next_next_dr = dr
+        self.next_next_x_tilt = x_tilt
+        self.next_next_y_tilt = y_tilt
+        self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw, self.next_next_dr, x_tilt=self.next_next_x_tilt, y_tilt=self.next_next_y_tilt)
+
+    def create_temp_states_1(self):
         if self.update_terrain:
             temp_states = []
             for yaw in self.fake_yaw_samples:
@@ -680,7 +757,28 @@ class CassieStepperEnv(CassieEnv):
             ret = self.temp_states
         return ret
 
-    def update_sample_prob_2(self, sample_prob):
+    def create_temp_states_3(self):
+        if self.update_terrain:
+            temp_states = []
+            for yaw in self.fake_yaw_samples:
+                for pitch in self.fake_pitch_samples:
+                    for r in self.fake_r_samples:
+                        for x_tilt in self.x_tilt_samples:
+                            for y_tilt in self.y_tilt_samples:
+                                actual_pitch = np.pi/2 - pitch
+                                self.set_next_step_location(actual_pitch, yaw, r, x_tilt=x_tilt, y_tilt=y_tilt)
+                                self.set_next_next_step_location(np.pi/2, 0, 0.35)
+                                temp_state = self.get_temp_state()
+                                temp_states.append(temp_state)
+            #print(self.fake_pitch_samples)
+            self.set_next_step_location(self.next_pitch, self.next_yaw, self.next_dr, x_tilt=self.next_x_tilt, y_tilt=self.next_y_tilt)
+            self.set_next_next_step_location(self.next_next_pitch, self.next_next_yaw, self.next_next_dr, x_tilt=self.next_next_x_tilt, y_tilt=self.next_next_y_tilt)
+            ret = np.stack(temp_states)
+        else:
+            ret = self.temp_states
+        return ret
+
+    def update_sample_prob_1(self, sample_prob):
         self.yaw_pitch_prob = sample_prob
         return
         if self.update_terrain:
@@ -693,7 +791,11 @@ class CassieStepperEnv(CassieEnv):
         self.yaw_pitch_r_prob = sample_prob
         return
 
-    def update_curriculum_2(self, curriculum):
+    def update_sample_prob_3(self, sample_prob):
+        self.yaw_pitch_r_tilt_prob = sample_prob
+        return
+
+    def update_curriculum_1(self, curriculum):
         self.yaw_pitch_prob *= 0
         self.yaw_pitch_prob[(self.yaw_sample_size-1)//2, (self.pitch_sample_size-1)//2] = 1
         # self.curriculum = min(curriculum, self.max_curriculum)
@@ -706,16 +808,29 @@ class CassieStepperEnv(CassieEnv):
         # self.yaw_pitch_prob[window, window] = prob
 
     def update_curriculum(self, curriculum):
-        #self.yaw_pitch_r_prob *= 0
-        #self.yaw_pitch_r_prob[(self.yaw_sample_size-1)//2, (self.pitch_sample_size-1)//2, 0] = 1
-        self.curriculum = min(curriculum, self.max_curriculum)
-        half_size = (self.sample_size-1)//2
-        if self.curriculum >= half_size:
-            self.curriculum = half_size
         self.yaw_pitch_r_prob *= 0
-        prob = 1.0 / (self.curriculum * 2 + 1)**3
-        window = slice(half_size-self.curriculum, half_size+self.curriculum+1)
-        self.yaw_pitch_r_prob[window, window, 0:curriculum*2+1] = prob
+        self.yaw_pitch_r_prob[(self.yaw_sample_size-1)//2, (self.pitch_sample_size-1)//2, 0] = 1
+        # self.curriculum = min(curriculum, self.max_curriculum)
+        # half_size = (self.sample_size-1)//2
+        # if self.curriculum >= half_size:
+        #     self.curriculum = half_size
+        # self.yaw_pitch_r_prob *= 0
+        # prob = 1.0 / (self.curriculum * 2 + 1)**3
+        # window = slice(half_size-self.curriculum, half_size+self.curriculum+1)
+        # self.yaw_pitch_r_prob[window, window, 0:curriculum*2+1] = prob
+
+    def update_curriculum_3(self, curriculum):
+        self.yaw_pitch_r_tilt_prob *= 0
+        self.yaw_pitch_r_tilt_prob[(self.yaw_sample_size-1)//2, (self.pitch_sample_size-1)//2, 0, 2, 2] = 1
+        return
+        # self.curriculum = min(curriculum, self.max_curriculum)
+        # half_size = (self.sample_size-1)//2
+        # if self.curriculum >= half_size:
+        #     self.curriculum = half_size
+        # self.yaw_pitch_r_prob *= 0
+        # prob = 1.0 / (self.curriculum * 2 + 1)**3
+        # window = slice(half_size-self.curriculum, half_size+self.curriculum+1)
+        # self.yaw_pitch_r_tilt_prob[window, window, 0:curriculum*2+1,] = prob
 
     def update_specialist(self, specialist):
         self.specialist = min(specialist, 5)
@@ -840,7 +955,7 @@ class CassieStepperEnv(CassieEnv):
         self.delta = deltas
         return deltas
 
-    def set_next_next_step_location(self, pitch, yaw, dr):
+    def set_next_next_step_location(self, pitch, yaw, dr, x_tilt=0, y_tilt=0):
         next_step_xyz = self.terrain_info[self.next_step_index]
         # if random:
         #     dr = self.np_random.uniform(*self.r_range)
@@ -848,7 +963,7 @@ class CassieStepperEnv(CassieEnv):
         #     dr = 0.35
         dr = dr
         base_phi = self.base_phi[self.next_step_index + 1]
-        base_yaw = self.terrain_info[self.next_step_index, 3]
+        base_yaw = self.terrain_info[self.next_step_index + 1, 3]
 
         dx = dr * np.sin(pitch) * np.cos(yaw + base_phi)
         # clip to prevent overlapping
@@ -870,12 +985,14 @@ class CassieStepperEnv(CassieEnv):
         self.terrain_info[self.next_step_index + 1, 1] = y
         self.terrain_info[self.next_step_index + 1, 2] = z
         self.terrain_info[self.next_step_index + 1, 3] = yaw + base_yaw
+        self.terrain_info[self.next_step_index + 1, 4] = x_tilt
+        self.terrain_info[self.next_step_index + 1, 5] = y_tilt
 
-    def set_next_step_location(self, pitch, yaw, dr):
+    def set_next_step_location(self, pitch, yaw, dr, x_tilt=0, y_tilt=0):
         next_step_xyz = self.terrain_info[self.next_step_index-1]
         dr = dr
         base_phi = self.base_phi[self.next_step_index]
-        base_yaw = self.terrain_info[self.next_step_index-1, 3]
+        base_yaw = self.terrain_info[self.next_step_index, 3]
 
         dx = dr * np.sin(pitch) * np.cos(yaw + base_phi)
         # clip to prevent overlapping
@@ -897,6 +1014,8 @@ class CassieStepperEnv(CassieEnv):
         self.terrain_info[self.next_step_index, 1] = y
         self.terrain_info[self.next_step_index, 2] = z
         self.terrain_info[self.next_step_index, 3] = yaw + base_yaw
+        self.terrain_info[self.next_step_index, 4] = x_tilt
+        self.terrain_info[self.next_step_index, 5] = y_tilt
 
 
 def euler2quat(z=0, y=0, x=0):
