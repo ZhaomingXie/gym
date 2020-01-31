@@ -9,13 +9,14 @@ class Walker2dEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.right_counter = 0
         self.prev_left = True
         self.prev_right = True
-        self.contact = 1
+        self.contact = 0
         mujoco_env.MujocoEnv.__init__(self, "walker2d.xml", 4)
         utils.EzPickle.__init__(self)
         print("initialize")
 
     def step(self, a):
         #a = np.ones(6)
+        #print("a", a)
         posbefore = self.sim.data.qpos[0]
         self.do_simulation(a, self.frame_skip)
         posafter, height, ang = self.sim.data.qpos[0:3]
@@ -23,9 +24,14 @@ class Walker2dEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         reward = ((posafter - posbefore) / self.dt)
         reward += alive_bonus
         reward -= 1e-3 * np.square(a).sum()
+        #reward = np.exp(-5*(1 - self.sim.data.qvel[0])**2)
         done = not (height > 0.8 and height < 2.0 and
                     ang > -1.0 and ang < 1.0)
         ob = self._get_obs()
+
+        if self.viewer is not None:
+            self.viewer.cam.lookat[0:2] = self.sim.data.qpos[0:2]
+            super().render("human")
 
         #data = self.sim.data
         #print(data.qfrc_actuator.flat[:])
@@ -44,6 +50,7 @@ class Walker2dEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         qvel = (self.sim.data.qvel - mean_vel) / std_vel
         #print(self.get_contact().shape)
         contacts = self.get_contact()
+        #print(contacts)
         return np.concatenate([qpos[1:], np.clip(qvel, -10, 10), self.contact*np.array([contacts[0]*1.0, contacts[1]*1.0])]).ravel()
         #return np.concatenate([qpos[1:], np.clip(qvel, -10, 10)]).ravel()
         #return np.concatenate([qpos[1:], np.clip(qvel, -10, 10), np.array([self.prev_right*1.0, self.prev_left*1.0])]).ravel()
@@ -85,7 +92,7 @@ class Walker2dEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
     def viewer_setup(self):
         self.viewer.cam.trackbodyid = 2
-        self.viewer.cam.distance = self.model.stat.extent * 0.5
+        self.viewer.cam.distance = self.model.stat.extent * 1.5
         self.viewer.cam.lookat[2] = 1.15
         self.viewer.cam.elevation = -20
 
