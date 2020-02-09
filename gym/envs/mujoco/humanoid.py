@@ -46,6 +46,7 @@ class HumanoidEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.qvel_std[0:3] = np.ones(3) * 10
         self.qvel_std[3:6] = np.ones(3) * 10
         self.prev_contact = np.zeros(2)
+        self.contact = 0
         mujoco_env.MujocoEnv.__init__(self, 'humanoid.xml', 5)
         utils.EzPickle.__init__(self)
 
@@ -68,12 +69,14 @@ class HumanoidEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         #                       np.array([(data.cfrc_ext[6][5] - self.prev_contact[0]) > 0, (data.cfrc_ext[9][5] - self.prev_contact[1]) > 0])*1.0])
         return np.concatenate([(data.qpos.flat[2:] - self.qpos_mean) / self.qpos_std,
                                data.qvel.flat[:] / self.qvel_std,
-                               contact])
+                               contact * self.contact])
                                #np.array([(data.cfrc_ext[6][5] > 0), data.cfrc_ext[9][5] > 0])*1.0])
                                #data.cinert.flat[:] / 100,
                                #data.cvel.flat[:] / 100)
                                #data.qfrc_actuator.flat[:] / 100,
                                #data.cfrc_ext.flat[:] / 3000])
+    def set_contact(self, contact):
+        self.contact = contact
 
     def step(self, a):
         #a[0:3] *= 0
