@@ -20,6 +20,7 @@ RAD2DEG = 180 / np.pi
 
 class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
     def __init__(self):
+        self.global_coordinate = True
         self.lower_joint_limit = np.array([-15, -22.5, -50, -167, -140, -22.5, -22.5, -50, -167, -140]) * np.pi / 180
         self.upper_joint_limit = np.array([22.5, 22.5, 80, -37, -30, 15, 22.5, 80, -37, -30]) * np.pi / 180
         self.init_x = 0
@@ -119,7 +120,8 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         #old_qvel = qvel.copy()
         qvel[0:2] = np.dot(matrix, qvel[0:2])
         ##qvel[3:5] = np.dot(matrix, qvel[3:5])
-        yaw = 0
+        if not self.global_coordinate:
+            yaw = 0
         
         #qpos[3:7] = euler2quat(z=0, y=pitch, x=roll)
         x, y, z, w = pybullet.getQuaternionFromEuler(np.array([roll, pitch, yaw]))
@@ -171,7 +173,8 @@ class CassieEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             qvel[self.actuator_vel_index] = motor_vel
             state = np.concatenate([qpos[self.mirror_pos_index], qvel[self.vel_index], [(self.phase % 14)/28.0]])
 
-        state[0] = 0
+        if not self.global_coordinate:
+            state[0] = 0
         state[1] = height
         return state
 
@@ -376,9 +379,9 @@ class CassieStepperEnv(CassieEnv):
         self.y_tilt_sample_size = 5
         self.max_curriculum = 5
         
-        self.yaw_samples = np.linspace(-20, 20, num=self.yaw_sample_size) * DEG2RAD
-        self.pitch_samples = np.linspace(-50, 50, num=self.pitch_sample_size) * DEG2RAD
-        self.r_samples = np.linspace(0.35, 1.0, num=self.r_sample_size)
+        self.yaw_samples = np.linspace(0, 0, num=self.yaw_sample_size) * DEG2RAD
+        self.pitch_samples = np.linspace(0, 0, num=self.pitch_sample_size) * DEG2RAD
+        self.r_samples = np.linspace(0.35, 0.35, num=self.r_sample_size)
         self.x_tilt_samples = np.linspace(0, 0, num=self.x_tilt_sample_size) * DEG2RAD
         self.y_tilt_samples = np.linspace(0, 0, num=self.y_tilt_sample_size) * DEG2RAD
         
@@ -424,6 +427,7 @@ class CassieStepperEnv(CassieEnv):
         self.temp_states = np.zeros((self.sample_size**2, self.observation_space.shape[0]))
 
         self.curriculum = 0
+        self.global_coordinate = False
 
     def generate_planks(self):
         with open("/home/zhaoming/Documents/dev/gym/gym/envs/mujoco/assets/cassie_planks_generated.xml", "w") as f:
@@ -570,7 +574,7 @@ class CassieStepperEnv(CassieEnv):
         self.next_y_tilt = 0
         self.next_next_y_tilt = 0
 
-        obs = super().reset(height_offset=0, phase=9)
+        obs = super().reset(height_offset=self.initial_height, phase=9)
         self.randomize_terrain()
 
         self.targets = self.delta_to_k_targets(k=self.lookahead)
@@ -963,7 +967,7 @@ class CassieStepperEnv(CassieEnv):
         #     dr = 0.35
         dr = dr
         base_phi = self.base_phi[self.next_step_index + 1]
-        base_yaw = self.terrain_info[self.next_step_index + 1, 3]
+        base_yaw = self.terrain_info[self.next_step_index, 3]  #not sure whether to do +1 for index
 
         dx = dr * np.sin(pitch) * np.cos(yaw + base_phi)
         # clip to prevent overlapping
